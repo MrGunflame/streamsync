@@ -57,16 +57,20 @@ type libvlc_media_close_cb = extern "C" fn(opaque: *mut c_void);
 
 fn main() {
     let mut buffer = Arc::new(Mutex::new(VideoBuffer::new()));
-    // stream::smem();
-    source::stream(buffer.clone());
-
-    loop {}
 
     // let mut buf = Vec::new();
     // std::fs::File::open(PATH2)
     //     .unwrap()
     //     .read_to_end(&mut buf)
     //     .unwrap();
+    // buffer.lock().unwrap().write(&buf);
+
+    // stream::smem();
+    source::stream(buffer.clone());
+
+    loop {
+        std::thread::sleep_ms(10000);
+    }
 
     // println!("FILE: {:?}", buf.len());
 

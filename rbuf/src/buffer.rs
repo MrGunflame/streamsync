@@ -1,3 +1,5 @@
+use gstreamer::Caps;
+
 /// A fixed size video ring buffer.
 ///
 /// When reading a stream we write to one end of the buffer, while reading from the other end.
@@ -11,6 +13,7 @@ pub struct VideoBuffer {
     buf: Vec<u8>,
     read_cursor: usize,
     writer_cursor: usize,
+    caps: Option<Caps>,
 }
 
 impl VideoBuffer {
@@ -19,7 +22,16 @@ impl VideoBuffer {
             buf: vec![0; 1000 * 1000 * 1000],
             read_cursor: 0,
             writer_cursor: 0,
+            caps: None,
         }
+    }
+
+    pub fn set_caps(&mut self, caps: Caps) {
+        self.caps = Some(caps);
+    }
+
+    pub fn caps(&self) -> Option<&Caps> {
+        self.caps.as_ref()
     }
 
     /// Returns `true` if there is at least len byte to read.
@@ -86,7 +98,7 @@ impl VideoBuffer {
     }
 
     pub fn write(&mut self, buf: &[u8]) {
-        //println!("Write {} bytes", buf.len());
+        println!("Write {} bytes", buf.len());
         self.buf.extend(buf);
         self.writer_cursor += buf.len();
     }

@@ -56,7 +56,7 @@ type libvlc_media_seek_cb = extern "C" fn(opaque: *mut c_void, offset: u64) -> c
 type libvlc_media_close_cb = extern "C" fn(opaque: *mut c_void);
 
 fn main() {
-    let mut buffer = Arc::new(Mutex::new(VideoBuffer::new()));
+    let mut buffer = Arc::new(VideoBuffer::new());
 
     // let mut buf = Vec::new();
     // std::fs::File::open(PATH2)
@@ -98,12 +98,12 @@ fn main() {
     // };
 
     // let media = Video::new(buf.clone()).into_media(instance);
-    let media = media_from_buffer(buffer, instance);
+    // let media = media_from_buffer(buffer, instance);
 
-    let player1 = unsafe { libvlc_media_player_new_from_media(media) };
-    println!("{:?}", player1);
+    // let player1 = unsafe { libvlc_media_player_new_from_media(media) };
+    // println!("{:?}", player1);
 
-    unsafe { libvlc_media_player_play(player1) };
+    // unsafe { libvlc_media_player_play(player1) };
 
     // let media = Video::new(buf).into_media(instance);
 

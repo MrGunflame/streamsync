@@ -12,7 +12,7 @@ use crate::buffer::VideoBuffer;
 const URI: &str = "http://devimages.apple.com/iphone/samples/bipbop/gear4/prog_index.m3u8";
 // const URI: &str = "https://video-weaver.fra02.hls.ttvnw.net/v1/playlist/CpgFGa7wm2n7HeMy0VIdPTzeu04autpVsD0QeJj6RACGNwxqnyEcrxzMUquRa35VnLPVvqgHxy15sXNhSEA2za8fMs4b7zY-YfWv69bGEntaR3I6p-rKPs8eAZT4VuDmWcqHi-Fe9yJ_cCSSZM1bHsOlyXKK1_J8lNvhCIwvzwSoOc0TKisT_mhPYK6PS7ySIaTZE3Ap3hPD3KLGvhcnDCm7mz1nLPApraMPyPEqxiRNT5pD4FVRNvdizL_LPJlep-nHjiuRKqppNyY6bVK4Q_jE3XtkRj9r7lbon7OrmPRIgu8EeleBSZ946iyzKW9g5Xu8Ktsb41ySt0AzD8DNx4Ucd6ePqYKfRDNlPSVrl6t9QgNkXa9vNDHNnZKYVkYxAhuwrT6ce92qZHHxn2bE0mWn2A5crJ7AQEUQwhdfRrfdNqJImj24r-CzXe2TR-hMZl71faXOJ4nCD7R7q_EA2GSVW84itizI6KiK8rlD-HBZVMod4sglifOfW9A7cmohLiHQ9qOteSw_2p95PxMOoRZw6UMYzvK7BK9vbVQrZGi2MRF-nUojX8UpAPKt49K31zkx8oaDwRyYH55-Dz6u3AXR83Ja2oefxGG8SAOoQ6JpPHN05Qwr01oMduoZ9a7T8y_BlnH09O_L-5fIpaDfuBXifaHfk2RxxwMkPtMrMS3Dv6YCXiCHvbx75YMomwXccaqqMxf-EB3Yrvn3feyGt17axH19lj6zBezj1vRy0_HRja1RllECSMJA-drhksVKYz86KpzQFlQrmWncNqc1CUbHPtSY0AbA1LEVKTpla9m_Zo-dHjDNp4mZbAMJjqzHrxrEJIakXDoKT6WaO9n3bRVwYz6tvFKPN5aciSBnG83Vs6ILcHABfAezuBoMCa_nbYCj6tNcoYCEIAEqCWV1LXdlc3QtMjD0BA.m3u8";
 
-pub fn stream(buf: Arc<Mutex<VideoBuffer>>) {
+pub fn stream(buf: Arc<VideoBuffer>) {
     gstreamer::init().unwrap();
 
     let buf2 = buf.clone();
@@ -27,7 +27,7 @@ pub fn stream(buf: Arc<Mutex<VideoBuffer>>) {
     });
 }
 
-fn create_pipeline(buf: Arc<Mutex<VideoBuffer>>) -> Pipeline {
+fn create_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     let pipeline = Pipeline::new(None);
 
     // let src = gstreamer::ElementFactory::make("souphttpsrc", None).unwrap();
@@ -139,7 +139,7 @@ pub struct DecodeBin {
 }
 
 impl DecodeBin {
-    pub fn new(pipeline: &Pipeline, buf: Arc<Mutex<VideoBuffer>>) -> Self {
+    pub fn new(pipeline: &Pipeline, buf: Arc<VideoBuffer>) -> Self {
         let element = ElementFactory::make("decodebin", None).unwrap();
         pipeline.add(&element).unwrap();
 
@@ -198,7 +198,7 @@ impl DecodeBin {
                 // let sink_pad = sink_el.static_pad("sink").expect("queue has no sinkpad");
                 // src_pad.link(&sink_pad).unwrap();
             } else if is_video {
-                buf.lock().unwrap().set_caps(src_pad.caps().unwrap());
+                buf.set_caps(src_pad.caps().unwrap());
 
                 //let queue = ElementFactory::make("queue", None).unwrap();
                 //let convert = ElementFactory::make("videoconvert", None).unwrap();
@@ -244,7 +244,7 @@ pub struct AppSink {
 }
 
 impl AppSink {
-    pub fn new(buf: Arc<Mutex<VideoBuffer>>) -> Self {
+    pub fn new(buf: Arc<VideoBuffer>) -> Self {
         let sink = ElementFactory::make("appsink", None).unwrap();
 
         let buf2 = buf.clone();
@@ -252,7 +252,7 @@ impl AppSink {
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_preroll(move |sink| {
-                    println!("preroll");
+                    //println!("preroll");
 
                     let preroll = sink.pull_preroll().unwrap();
 
@@ -278,7 +278,7 @@ impl AppSink {
                         })
                         .unwrap();
 
-                    buf2.lock().unwrap().write(&map);
+                    // buf2.write(&map);
 
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -308,9 +308,9 @@ impl AppSink {
                         })
                         .unwrap();
 
-                    println!("{:?}", map);
+                    //println!("{:?}", map);
 
-                    buf.lock().unwrap().write(&map);
+                    buf.write(&map);
 
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -321,11 +321,11 @@ impl AppSink {
     }
 }
 
-fn playback_pipeline(buf: Arc<Mutex<VideoBuffer>>) -> Pipeline {
+fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     let pipeline = Pipeline::new(None);
 
     let src = ElementFactory::make("appsrc", None).unwrap();
-    let videoconvert = ElementFactory::make("videoconvert", None).unwrap();
+    //let videoconvert = ElementFactory::make("videoconvert", None).unwrap();
     //let queue = ElementFactory::make("queue", None).unwrap();
     let sink = ElementFactory::make("autovideosink", None).unwrap();
 
@@ -334,22 +334,20 @@ fn playback_pipeline(buf: Arc<Mutex<VideoBuffer>>) -> Pipeline {
     appsrc.set_is_live(true);
     appsrc.set_do_timestamp(true);
 
-    pipeline.add_many(&[&src, &videoconvert, &sink]).unwrap();
-    gstreamer::Element::link_many(&[&src, &videoconvert, &sink]).unwrap();
+    pipeline.add_many(&[&src, &sink]).unwrap();
+    gstreamer::Element::link_many(&[&src, &sink]).unwrap();
 
     appsrc.set_callbacks(
         gstreamer_app::AppSrcCallbacks::builder()
             .need_data(move |appsrc, len| {
-                println!("need_data({})", len);
+                // println!("need_data({})", len);
 
                 if appsrc.caps().is_none() {
                     let caps = loop {
-                        let vid = buf.lock().unwrap();
-                        match vid.caps() {
+                        match buf.caps() {
                             Some(c) => break c.clone(),
                             None => {
                                 println!("no caps yet");
-                                drop(vid);
                                 std::thread::sleep_ms(1000);
                             }
                         }
@@ -358,18 +356,18 @@ fn playback_pipeline(buf: Arc<Mutex<VideoBuffer>>) -> Pipeline {
                     appsrc.set_caps(Some(&caps));
                 }
 
-                let mut vid = buf.lock().unwrap();
+                let caps = appsrc.caps().unwrap();
+                let size = caps.size();
+                //println!("BUFFER SIZE: {}", size);
+
                 let src = loop {
-                    if !vid.can_read(5529600) {
-                        println!("idle");
-                        drop(vid);
-                        std::thread::sleep_ms(1000);
-                        vid = buf.lock().unwrap();
+                    if !buf.can_read(5529600) {
+                        continue;
                     }
 
-                    break vid.read(5529600).unwrap();
+                    break buf.read(5529600).unwrap();
                 };
-                println!("READ {}", src.len());
+                //println!("READ {}", src.len());
 
                 let mem = gstreamer::Memory::from_slice(src);
 
@@ -377,7 +375,7 @@ fn playback_pipeline(buf: Arc<Mutex<VideoBuffer>>) -> Pipeline {
                 let buffer_mut = buffer.make_mut();
                 buffer_mut.append_memory(mem);
 
-                appsrc.push_buffer(buffer).unwrap();
+                let _ = appsrc.push_buffer(buffer);
             })
             .build(),
     );

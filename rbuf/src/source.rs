@@ -1,3 +1,4 @@
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use gstreamer::{
@@ -30,34 +31,34 @@ pub fn stream(buf: Arc<VideoBuffer>) {
 fn create_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     let pipeline = Pipeline::new(None);
 
-    // let src = gstreamer::ElementFactory::make("souphttpsrc", None).unwrap();
-    // src.set_property("location", URI);
+    let src = gstreamer::ElementFactory::make("souphttpsrc", None).unwrap();
+    src.set_property("location", URI);
 
-    let src = gstreamer::ElementFactory::make("filesrc", None).unwrap();
-    src.set_property("location", super::PATH2);
+    // let src = gstreamer::ElementFactory::make("filesrc", None).unwrap();
+    // src.set_property("location", super::PATH2);
 
-    // let queue = ElementFactory::make("multiqueue", None).unwrap();
-    // queue.set_property("max-size-buffers", 0u32);
-    // queue.set_property("max-size-time", 0u64);
-    // queue.set_property("max-size-bytes", 1024u32 * 1024 * 100);
+    let queue = ElementFactory::make("multiqueue", None).unwrap();
+    queue.set_property("max-size-buffers", 0u32);
+    queue.set_property("max-size-time", 0u64);
+    queue.set_property("max-size-bytes", 1024u32 * 1024 * 100);
 
-    // let hlsdemux = gstreamer::ElementFactory::make("hlsdemux", None).unwrap();
+    let hlsdemux = gstreamer::ElementFactory::make("hlsdemux", None).unwrap();
 
-    // pipeline.add_many(&[&src, &queue, &hlsdemux]).unwrap();
+    pipeline.add_many(&[&src, &queue, &hlsdemux]).unwrap();
 
-    // src.link(&hlsdemux).unwrap();
-    pipeline.add(&src).unwrap();
+    src.link(&hlsdemux).unwrap();
+    // pipeline.add(&src).unwrap();
 
     let decodebin = DecodeBin::new(&pipeline, buf);
 
-    // let muxer_clone = decodebin.clone();
-    // let queue_clone = queue.clone();
-    // hlsdemux.connect_pad_added(move |demux, src_pad| {
-    //     handle_demux_pad_added(demux, src_pad, &queue_clone, &muxer_clone.element.as_ref());
-    // });
-    // hlsdemux.sync_state_with_parent().unwrap();
+    let muxer_clone = decodebin.clone();
+    let queue_clone = queue.clone();
+    hlsdemux.connect_pad_added(move |demux, src_pad| {
+        handle_demux_pad_added(demux, src_pad, &queue_clone, &muxer_clone.element.as_ref());
+    });
+    hlsdemux.sync_state_with_parent().unwrap();
 
-    src.link(&decodebin.element).unwrap();
+    // src.link(&decodebin.element).unwrap();
 
     pipeline
 }
@@ -200,17 +201,17 @@ impl DecodeBin {
             } else if is_video {
                 buf.set_caps(src_pad.caps().unwrap());
 
-                //let queue = ElementFactory::make("queue", None).unwrap();
-                //let convert = ElementFactory::make("videoconvert", None).unwrap();
-                //let scale = ElementFactory::make("videoscale", None).unwrap();
-                //let sink = ElementFactory::make("autovideosink", None).unwrap();
+                // let queue = ElementFactory::make("queue", None).unwrap();
+                // let convert = ElementFactory::make("videoconvert", None).unwrap();
+                // let scale = ElementFactory::make("videoscale", None).unwrap();
+                // let sink = ElementFactory::make("autovideosink", None).unwrap();
                 let sink = AppSink::new(buf);
                 let sink_el: &gstreamer::Element = sink.element.as_ref();
 
-                //let elements = [&queue, &convert, &scale, &sink];
+                // let elements = [&queue, &convert, &scale, &sink];
                 let elements = [sink_el];
                 pipeline.add_many(&elements).unwrap();
-                gstreamer::Element::link_many(&elements).unwrap();
+                //gstreamer::Element::link_many(&[&queue, &convert, &scale]).unwrap();
 
                 for e in elements {
                     e.sync_state_with_parent().unwrap();
@@ -254,29 +255,29 @@ impl AppSink {
                 .new_preroll(move |sink| {
                     //println!("preroll");
 
-                    let preroll = sink.pull_preroll().unwrap();
+                    // let preroll = sink.pull_preroll().unwrap();
 
-                    let buffer = preroll
-                        .buffer()
-                        .ok_or_else(|| {
-                            element_error!(
-                                sink,
-                                gstreamer::ResourceError::Failed,
-                                ("Failed to get preroll buffer from appsink")
-                            );
-                        })
-                        .unwrap();
+                    // let buffer = preroll
+                    //     .buffer()
+                    //     .ok_or_else(|| {
+                    //         element_error!(
+                    //             sink,
+                    //             gstreamer::ResourceError::Failed,
+                    //             ("Failed to get preroll buffer from appsink")
+                    //         );
+                    //     })
+                    //     .unwrap();
 
-                    let map = buffer
-                        .map_readable()
-                        .map_err(|_| {
-                            element_error!(
-                                sink,
-                                gstreamer::ResourceError::Failed,
-                                ("Failed to map preroll buffer readable")
-                            )
-                        })
-                        .unwrap();
+                    // let map = buffer
+                    //     .map_readable()
+                    //     .map_err(|_| {
+                    //         element_error!(
+                    //             sink,
+                    //             gstreamer::ResourceError::Failed,
+                    //             ("Failed to map preroll buffer readable")
+                    //         )
+                    //     })
+                    //     .unwrap();
 
                     // buf2.write(&map);
 
@@ -286,31 +287,34 @@ impl AppSink {
                     //println!("got data");
                     let sample = sink.pull_sample().unwrap();
 
-                    let buffer = sample
-                        .buffer()
-                        .ok_or_else(|| {
-                            element_error!(
-                                sink,
-                                gstreamer::ResourceError::Failed,
-                                ("Failed to get buffer from appsink")
-                            );
-                        })
-                        .unwrap();
+                    // let buffer = sample
+                    //     .buffer()
+                    //     .ok_or_else(|| {
+                    //         element_error!(
+                    //             sink,
+                    //             gstreamer::ResourceError::Failed,
+                    //             ("Failed to get buffer from appsink")
+                    //         );
+                    //     })
+                    //     .unwrap();
 
-                    let map = buffer
-                        .map_readable()
-                        .map_err(|_| {
-                            element_error!(
-                                sink,
-                                gstreamer::ResourceError::Failed,
-                                ("Failed to map buffer readable")
-                            );
-                        })
-                        .unwrap();
+                    // let map = buffer
+                    //     .map_readable()
+                    //     .map_err(|_| {
+                    //         element_error!(
+                    //             sink,
+                    //             gstreamer::ResourceError::Failed,
+                    //             ("Failed to map buffer readable")
+                    //         );
+                    //     })
+                    //     .unwrap();
 
-                    //println!("{:?}", map);
+                    // println!("{:?}", map.len());
+                    // println!("{:?}", map);
 
-                    buf.write(&map);
+                    // buf.set_frame_size(map.len());
+                    buf.write_buf(sample);
+                    // buf.write(&map);
 
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -326,7 +330,7 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
 
     let src = ElementFactory::make("appsrc", None).unwrap();
     //let videoconvert = ElementFactory::make("videoconvert", None).unwrap();
-    //let queue = ElementFactory::make("queue", None).unwrap();
+    let queue = ElementFactory::make("queue", None).unwrap();
     let sink = ElementFactory::make("autovideosink", None).unwrap();
 
     let appsrc = src.downcast_ref::<gstreamer_app::AppSrc>().unwrap();
@@ -334,8 +338,8 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     appsrc.set_is_live(true);
     appsrc.set_do_timestamp(true);
 
-    pipeline.add_many(&[&src, &sink]).unwrap();
-    gstreamer::Element::link_many(&[&src, &sink]).unwrap();
+    pipeline.add_many(&[&src, &queue, &sink]).unwrap();
+    gstreamer::Element::link_many(&[&src, &queue, &sink]).unwrap();
 
     appsrc.set_callbacks(
         gstreamer_app::AppSrcCallbacks::builder()
@@ -356,26 +360,31 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
                     appsrc.set_caps(Some(&caps));
                 }
 
-                let caps = appsrc.caps().unwrap();
-                let size = caps.size();
-                //println!("BUFFER SIZE: {}", size);
+                // let frame_size = loop {
+                //     if let Some(size) = buf.frame_size() {
+                //         break size.get();
+                //     }
+                // };
+                // println!("Frame size is {}", frame_size);
 
-                let src = loop {
-                    if !buf.can_read(5529600) {
-                        continue;
-                    }
+                // let src = loop {
+                //     if !buf.can_read(frame_size) {
+                //         continue;
+                //     }
 
-                    break buf.read(5529600).unwrap();
-                };
-                //println!("READ {}", src.len());
+                //     break buf.read(frame_size).unwrap();
+                // };
+                // println!("READ {}", src.len());
 
-                let mem = gstreamer::Memory::from_slice(src);
+                let sample = buf.read_buf();
 
-                let mut buffer = gstreamer::Buffer::new();
-                let buffer_mut = buffer.make_mut();
-                buffer_mut.append_memory(mem);
+                // let mem = gstreamer::Memory::from_slice(src);
 
-                let _ = appsrc.push_buffer(buffer);
+                // let mut buffer = gstreamer::Buffer::new();
+                // let buffer_mut = buffer.make_mut();
+                // buffer_mut.append_memory(mem);
+
+                let _ = appsrc.push_buffer(sample.buffer_owned().unwrap());
             })
             .build(),
     );

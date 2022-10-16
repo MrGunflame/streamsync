@@ -1,8 +1,9 @@
 use std::{
     cell::UnsafeCell,
+    num::NonZeroUsize,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex,
+        mpsc, Mutex,
     },
 };
 
@@ -22,15 +23,35 @@ pub struct VideoBuffer {
     read_cursor: AtomicUsize,
     writer_cursor: AtomicUsize,
     caps: Mutex<Option<Caps>>,
+    // Non-Zero usize, 0 = None
+    frame_size: AtomicUsize,
+    tx: mpsc::Sender<gstreamer::Sample>,
+    rx: mpsc::Receiver<gstreamer::Sample>,
 }
 
 impl VideoBuffer {
     pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel();
+
         Self {
             buf: UnsafeCell::new(vec![0; 1000 * 1000 * 1000]),
             read_cursor: AtomicUsize::new(0),
             writer_cursor: AtomicUsize::new(0),
             caps: Mutex::new(None),
+            frame_size: AtomicUsize::new(0),
+            tx,
+            rx,
+        }
+    }
+
+    pub fn set_frame_size(&self, size: usize) {
+        self.frame_size.store(size, Ordering::SeqCst)
+    }
+
+    pub fn frame_size(&self) -> Option<NonZeroUsize> {
+        match self.frame_size.load(Ordering::SeqCst) {
+            0 => None,
+            n => unsafe { Some(NonZeroUsize::new_unchecked(n)) },
         }
     }
 
@@ -50,6 +71,14 @@ impl VideoBuffer {
         //     self.read_cursor.load(Ordering::SeqCst)
         // );
         self.writer_cursor.load(Ordering::SeqCst) - self.read_cursor.load(Ordering::SeqCst) >= len
+    }
+
+    pub fn write_buf(&self, buf: gstreamer::Sample) {
+        self.tx.send(buf).unwrap();
+    }
+
+    pub fn read_buf(&self) -> gstreamer::Sample {
+        self.rx.recv().unwrap()
     }
 
     /// Reads `len` bytes from the buffer.

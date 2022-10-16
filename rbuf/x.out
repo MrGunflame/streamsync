@@ -1,7 +1,878 @@
 no caps yet
+handle_demux_pad_added
 [DECODEBIN] connect_pad_added
-Some(Caps("video/x-raw, format=(string)I420, width=(int)2560, height=(int)1440, interlace-mode=(string)progressive, pixel-aspect-ratio=(fraction)1/1, chroma-site=(string)mpeg2, colorimetry=(string)bt601, framerate=(fraction)60/1"))
+Some(Caps("video/x-raw, format=(string)I420, width=(int)480, height=(int)360, interlace-mode=(string)progressive, pixel-aspect-ratio=(fraction)1/1, chroma-site=(string)dv, colorimetry=(string)2:4:5:4, framerate=(fraction)0/1"))
 [DECODEBIN] connect_pad_added
-Some(Caps("audio/x-raw, format=(string)F32LE, layout=(string)non-interleaved, rate=(int)48000, channels=(int)2, channel-mask=(bitmask)0x0000000000000003"))
-Setting caps: Caps("video/x-raw, format=(string)I420, width=(int)2560, height=(int)1440, interlace-mode=(string)progressive, pixel-aspect-ratio=(fraction)1/1, chroma-site=(string)mpeg2, colorimetry=(string)bt601, framerate=(fraction)60/1")
-[WARN] Warning(Message { ptr: 0x7fce7c009c30, type: "warning", seqnum: 274, src: Some("autovideosink0-actual-sink-xvimage"), structure: Some(GstMessageWarning, gerror=(GError)NULL, debug=(string)"../gstreamer/subprojects/gstreamer/libs/gst/base/gstbasesink.c\(1249\):\ gst_base_sink_query_latency\ \(\):\ /GstPipeline:pipeline1/GstAutoVideoSink:autovideosink0/GstXvImageSink:autovideosink0-actual-sink-xvimage:\012Not\ enough\ buffering\ available\ for\ \ the\ processing\ deadline\ of\ 0:00:00.015000000\,\ add\ enough\ queues\ to\ buffer\ \ 0:00:00.015000000\ additional\ data.\ Shortening\ processing\ latency\ to\ 0:00:00.000000000.";) })
+Some(Caps("audio/x-raw, format=(string)F32LE, layout=(string)non-interleaved, rate=(int)22050, channels=(int)1"))
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:00.006575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: DISCONT, metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:00.039942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:00.073309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:00.106675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:00.140042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:00.173409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:00.206775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:00.240142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:00.273509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:00.306875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:00.340242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:00.373609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:00.406975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:00.440342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:00.473709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:00.507075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:00.540442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:00.573809185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:00.607175852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:00.640542518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:00.673909185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:00.707275852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:00.740642518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:00.774009185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:00.807375852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:00.840742518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:00.874109185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+Setting caps: Caps("video/x-raw, format=(string)I420, width=(int)480, height=(int)360, interlace-mode=(string)progressive, pixel-aspect-ratio=(fraction)1/1, chroma-site=(string)dv, colorimetry=(string)2:4:5:4, framerate=(fraction)0/1")
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:00.907475852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:00.940842518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:00.974209185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:01.007575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:01.040942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:01.074309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:01.107675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:01.141042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:01.174409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:01.207775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:01.241142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:01.274509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:01.307875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:01.341242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:01.374609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:01.407975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:01.441342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:01.474709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:01.508075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:01.541442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:01.574809185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:01.608175852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:01.641542518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:01.674909185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:01.708275852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:01.741642518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:01.775009185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:01.808375852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:01.841742518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:01.875109185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:01.908475852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:01.941842518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:01.975209185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:02.008575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:02.041942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:02.075309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:02.108675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:02.142042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:02.175409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:02.208775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:02.242142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:02.275509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:02.308875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:02.342242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:02.375609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:02.408975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:02.442342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:02.475709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:02.509075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:02.542442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:02.575809185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:02.609175852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:02.642542518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:02.675909185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:02.709275852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:02.742642518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:02.776009185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:02.809375852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:02.842742518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:02.876109185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:02.909475852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:02.942842518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:02.976209185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:03.009575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:03.042942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:03.076309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:03.109675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:03.143042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:03.176409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:03.209775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:03.243142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:03.276509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:03.309875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:03.343242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:03.376609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:03.409975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:03.443342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:03.476709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:03.510075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:03.543442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:03.576809185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:03.610175852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:03.643542518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:03.676909185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:03.710275852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:03.743642518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:03.777009185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:03.810375852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:03.843742518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:03.877109185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:03.910475852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:03.943842518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:03.977209185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:04.010575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:04.043942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:04.077309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:04.110675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:04.144042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:04.177409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:04.210775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:04.244142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:04.277509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:04.310875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:04.344242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:04.377609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:04.410975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:04.444342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:04.477709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:04.511075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:04.544442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:04.577809185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:04.611175852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:04.644542518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:04.677909185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:04.711275852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:04.744642518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:04.778009185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:04.811375852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:04.844742518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:04.878109185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:04.911475852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:04.944842518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:04.978209185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:05.011575852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:05.044942518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:05.078309185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:05.111675852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:05.145042518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:05.178409185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:05.211775852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:05.245142518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:05.278509185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:05.311875852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:05.345242518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:05.378609185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:05.411975852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:05.445342518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:05.478709185, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:05.512075852, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:05.545442518, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:05.578820296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:05.612186963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:05.645553629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:05.678920296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:05.712286963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:05.745653629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:05.779020296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:05.812386963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:05.845753629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:05.879120296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:05.912486963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:05.945853629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:05.979220296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:06.012586963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:06.045953629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:06.079320296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:06.112686963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:06.146053629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:06.179420296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:06.212786963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:06.246153629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:06.279520296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:06.312886963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:06.346253629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:06.379620296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:06.412986963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:06.446353629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:06.479720296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:06.513086963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:06.546453629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:06.579820296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df962f5a0, pts: 0:00:06.613186963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d1000, pts: 0:00:06.646553629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc022d80, pts: 0:00:06.679920296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4259360, pts: 0:00:06.713286963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02ac60, pts: 0:00:06.746653629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df97d16c0, pts: 0:00:06.780020296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4309a20, pts: 0:00:06.813386963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43095a0, pts: 0:00:06.846753629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df4230b40, pts: 0:00:06.880120296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc02fc60, pts: 0:00:06.913486963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df43cf900, pts: 0:00:06.946853629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc011360, pts: 0:00:06.980220296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df40ebc60, pts: 0:00:07.013586963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0df8009240, pts: 0:00:07.046953629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc014000, pts: 0:00:07.080320296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016900, pts: 0:00:07.113686963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc016d80, pts: 0:00:07.147053629, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc021000, pts: 0:00:07.180420296, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200
+259200
+BufferMap(Buffer { ptr: 0x7f0dfc01fea0, pts: 0:00:07.213786963, dts: --:--:--.---------, duration: --:--:--.---------, size: 259200, offset: 18446744073709551615, offset_end: 18446744073709551615, flags: (empty), metas: [] })
+READ 259200
+Frame size is 259200

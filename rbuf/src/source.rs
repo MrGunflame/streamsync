@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use gstreamer::{
-    element_error, element_warning, gst_warning, prelude::*, ElementFactory, Pipeline,
+    element_error, element_warning, gst_warning, prelude::*, ClockTime, ElementFactory, Pipeline,
 };
 use gstreamer_app::AppSrc;
 
@@ -19,12 +19,12 @@ pub fn stream(buf: Arc<VideoBuffer>) {
     let buf2 = buf.clone();
     std::thread::spawn(move || {
         let pipeline = create_pipeline(buf2);
-        main_loop(pipeline);
+        main_loop(pipeline, false);
     });
 
     std::thread::spawn(move || {
         let rx = playback_pipeline(buf);
-        main_loop(rx);
+        main_loop(rx, true);
     });
 }
 
@@ -63,18 +63,20 @@ fn create_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     pipeline
 }
 
-fn main_loop(pipeline: Pipeline) {
+fn main_loop(pipeline: Pipeline, pause: bool) {
     pipeline.set_state(gstreamer::State::Playing).unwrap();
 
-    // let pl = pipeline.clone();
-    // std::thread::spawn(move || loop {
-    //     std::thread::sleep_ms(5000);
-    //     println!("pause");
-    //     pl.set_state(gstreamer::State::Paused).unwrap();
-    //     std::thread::sleep_ms(5000);
-    //     println!("play");
-    //     pl.set_state(gstreamer::State::Playing).unwrap();
-    // });
+    if false {
+        let pl = pipeline.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep_ms(5000);
+            println!("pause");
+            pl.set_state(gstreamer::State::Paused).unwrap();
+            std::thread::sleep_ms(5000);
+            println!("play");
+            pl.set_state(gstreamer::State::Playing).unwrap();
+        });
+    }
 
     let bus = pipeline.bus().unwrap();
 
@@ -331,12 +333,16 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     let src = ElementFactory::make("appsrc", None).unwrap();
     //let videoconvert = ElementFactory::make("videoconvert", None).unwrap();
     let queue = ElementFactory::make("queue", None).unwrap();
+    queue.set_property("max-size-buffers", 0u32);
+    queue.set_property("max-size-bytes", 100u32 * 1000 * 100);
+
     let sink = ElementFactory::make("autovideosink", None).unwrap();
 
     let appsrc = src.downcast_ref::<gstreamer_app::AppSrc>().unwrap();
     appsrc.set_format(gstreamer::Format::Time);
     appsrc.set_is_live(true);
     appsrc.set_do_timestamp(true);
+    appsrc.set_latency(Some(ClockTime::SECOND), Some(ClockTime::SECOND));
 
     pipeline.add_many(&[&src, &queue, &sink]).unwrap();
     gstreamer::Element::link_many(&[&src, &queue, &sink]).unwrap();

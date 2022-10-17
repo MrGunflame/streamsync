@@ -1,5 +1,6 @@
 mod buffer;
 mod player;
+mod size;
 mod source;
 mod stream;
 
@@ -60,6 +61,8 @@ type libvlc_media_close_cb = extern "C" fn(opaque: *mut c_void);
 
 #[tokio::main]
 async fn main() {
+    pretty_env_logger::init();
+
     gstreamer::init().unwrap();
 
     let buffer = Arc::new(VideoBuffer::new());

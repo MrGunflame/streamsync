@@ -1,8 +1,10 @@
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use futures::StreamExt;
 use gstreamer::{
-    element_error, element_warning, gst_warning, prelude::*, ClockTime, ElementFactory, Pipeline,
+    element_error, element_warning, gst_warning, prelude::*, ClockTime, ElementFactory,
+    MessageView, Pipeline,
 };
 use gstreamer_app::AppSrc;
 
@@ -288,6 +290,7 @@ impl AppSink {
                 .new_sample(move |sink| {
                     //println!("got data");
                     let sample = sink.pull_sample().unwrap();
+                    println!("{:?}", sample);
 
                     // let buffer = sample
                     //     .buffer()
@@ -350,7 +353,7 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     appsrc.set_callbacks(
         gstreamer_app::AppSrcCallbacks::builder()
             .need_data(move |appsrc, len| {
-                // println!("need_data({})", len);
+                println!("need_data({})", len);
 
                 if appsrc.caps().is_none() {
                     let caps = loop {
@@ -396,4 +399,56 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     );
 
     pipeline
+}
+
+#[derive(Debug)]
+pub struct StreamPipeline {
+    pl: Pipeline,
+}
+
+impl StreamPipeline {
+    pub fn new(buf: Arc<VideoBuffer>) -> Self {
+        Self {
+            pl: create_pipeline(buf),
+        }
+    }
+
+    pub async fn run(self) {
+        pipline_run_async(&self.pl).await;
+    }
+}
+
+#[derive(Debug)]
+pub struct PlaybackPipeline {
+    pl: Pipeline,
+}
+
+impl PlaybackPipeline {
+    pub fn new(buf: Arc<VideoBuffer>) -> Self {
+        Self {
+            pl: playback_pipeline(buf),
+        }
+    }
+
+    pub async fn run(self) {
+        pipline_run_async(&self.pl).await;
+    }
+}
+
+async fn pipline_run_async(pipeline: &Pipeline) {
+    pipeline.set_state(gstreamer::State::Playing).unwrap();
+
+    let mut stream = pipeline.bus().unwrap().stream();
+
+    while let Some(msg) = stream.next().await {
+        match msg.view() {
+            MessageView::Error(msg) => {
+                panic!("{:?}", msg);
+            }
+            MessageView::Warning(msg) => {
+                println!("[WARN] {:?}", msg);
+            }
+            _ => (),
+        }
+    }
 }

@@ -12,7 +12,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::buffer::VideoBuffer;
+use crate::{
+    buffer::VideoBuffer,
+    source::{PlaybackPipeline, StreamPipeline},
+};
 
 const PATH: &str = "/home/robert/Documents/Music/Stellaris/ridingthesolarwind.ogg";
 const PATH2: &str = "/home/robert/Videos/kiss.mp4";
@@ -55,65 +58,18 @@ type libvlc_media_read_cb = extern "C" fn(opaque: *mut c_void, buf: *mut u8, len
 type libvlc_media_seek_cb = extern "C" fn(opaque: *mut c_void, offset: u64) -> c_int;
 type libvlc_media_close_cb = extern "C" fn(opaque: *mut c_void);
 
-fn main() {
-    let mut buffer = Arc::new(VideoBuffer::new());
+#[tokio::main]
+async fn main() {
+    gstreamer::init().unwrap();
 
-    // let mut buf = Vec::new();
-    // std::fs::File::open(PATH2)
-    //     .unwrap()
-    //     .read_to_end(&mut buf)
-    //     .unwrap();
-    // buffer.lock().unwrap().write(&buf);
+    let buffer = Arc::new(VideoBuffer::new());
+    let stream = StreamPipeline::new(buffer.clone());
+    let playback = PlaybackPipeline::new(buffer);
 
-    // stream::smem();
-    source::stream(buffer.clone());
-
-    loop {
-        std::thread::sleep_ms(10000);
-    }
-
-    // println!("FILE: {:?}", buf.len());
-
-    // let video = Box::leak(Box::new(Video::new(buf))) as *const Video;
-    // println!("VIDEO ADDR: {:?}", video);
-
-    let v = CString::new(String::from("--verbose=2")).unwrap();
-
-    let args = [v.as_c_str().as_ptr()];
-
-    let instance = unsafe { libvlc_new(1, args.as_ptr()) };
-    println!("{:?}", instance);
-
-    // println!("inst");
-
-    // let media = unsafe {
-    //     libvlc_media_new_callbacks(
-    //         instance,
-    //         open_cb,
-    //         read_cb,
-    //         seek_cb,
-    //         close_cb,
-    //         video as *const c_void,
-    //     )
-    // };
-
-    // let media = Video::new(buf.clone()).into_media(instance);
-    // let media = media_from_buffer(buffer, instance);
-
-    // let player1 = unsafe { libvlc_media_player_new_from_media(media) };
-    // println!("{:?}", player1);
-
-    // unsafe { libvlc_media_player_play(player1) };
-
-    // let media = Video::new(buf).into_media(instance);
-
-    // let player2 = unsafe { libvlc_media_player_new_from_media(media) };
-    // println!("{:?}", player2);
-
-    // unsafe { libvlc_media_player_play(player2) };
-
-    loop {}
-    // std::thread::sleep_ms(1000000000);
+    tokio::join! {
+        stream.run(),
+        playback.run(),
+    };
 }
 
 fn it_works() {

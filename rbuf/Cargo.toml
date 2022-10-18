@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 libc = "0.2.134"
-gstreamer = "0.18.8"
+gstreamer = { version = "0.18.8", features = ["v1_16"] }
 gstreamer-app = "0.18.7"
 gstreamer-player = "0.18.0"
 tokio = { version = "1.21.2", features = ["full"] }

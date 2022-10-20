@@ -11,7 +11,5 @@ mod srt;
 async fn main() {
     pretty_env_logger::init();
 
-    let socket = UdpSocket::bind("0.0.0.0:9999").await.unwrap();
-
-    srt::server::serve(socket).await.unwrap();
+    srt::server::serve("0.0.0.0:9999").await.unwrap();
 }

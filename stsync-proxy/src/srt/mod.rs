@@ -19,11 +19,17 @@ use crate::proto::{Bits, Decode, Encode, U32};
 pub enum Error {
     #[error("io: {0}")]
     Io(#[from] io::Error),
+    #[error("invalid packet type: {0}")]
+    InvalidPacketType(u8),
     #[error("invalid handshake type: {0}")]
     InvalidHandshakeType(u32),
     #[error("invalid control type: {0}")]
     InvalidControlType(u16),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid control type: {0}")]
+pub struct InvalidControlType(u16);
 
 /// SRT header followed directly by UDP header.
 #[derive(Copy, Clone, Debug, Default)]
@@ -52,7 +58,10 @@ impl Header {
     }
 
     pub fn as_control(&mut self) -> Result<ControlHeader, Error> {
-        Ok(ControlHeader { header: self })
+        match self.packet_type() {
+            PacketType::Control => Ok(ControlHeader { header: self }),
+            PacketType::Data => Err(Error::InvalidPacketType(0)),
+        }
     }
 }
 
@@ -351,7 +360,91 @@ pub struct HandshakePacket {
     extension_contents: Vec<u8>,
 }
 
-impl HandshakePacket {}
+impl HandshakePacket {
+    fn encode_body<W>(&self, mut writer: W) -> Result<(), Error>
+    where
+        W: Write,
+    {
+        self.version.encode(&mut writer)?;
+        self.encryption_field.encode(&mut writer)?;
+        self.extension_field.encode(&mut writer)?;
+        self.initial_packet_sequence_number.encode(&mut writer)?;
+        self.maximum_transmission_unit_size.encode(&mut writer)?;
+        self.maximum_flow_window_size.encode(&mut writer)?;
+        self.handshake_type.encode(&mut writer)?;
+        self.srt_socket_id.encode(&mut writer)?;
+        self.syn_cookie.encode(&mut writer)?;
+        self.peer_ip_address.encode(&mut writer)?;
+        self.extension_type.encode(&mut writer)?;
+        self.extension_length.encode(&mut writer)?;
+
+        writer.write_all(&self.extension_contents)?;
+        Ok(())
+    }
+
+    fn decode_body<R>(mut reader: R) -> Result<Self, Error>
+    where
+        R: Read,
+    {
+        let version = u32::decode(&mut reader)?;
+        let encryption_field = u16::decode(&mut reader)?;
+        let extension_field = u16::decode(&mut reader)?;
+        let initial_packet_sequence_number = u32::decode(&mut reader)?;
+        let maximum_transmission_unit_size = u32::decode(&mut reader)?;
+        let maximum_flow_window_size = u32::decode(&mut reader)?;
+        let handshake_type = HandshakeType::decode(&mut reader)?;
+        let srt_socket_id = u32::decode(&mut reader)?;
+        let syn_cookie = u32::decode(&mut reader)?;
+        let peer_ip_address = u128::decode(&mut reader)?;
+        // let extension_type = u16::decode(&mut reader)?;
+        // let extension_length = u16::decode(&mut reader)?;
+        // TODO: impl
+        // let extension_contents = Vec::new();
+
+        Ok(Self {
+            header: Header::default(),
+            version,
+            encryption_field,
+            extension_field,
+            initial_packet_sequence_number,
+            maximum_transmission_unit_size,
+            maximum_flow_window_size,
+            handshake_type,
+            srt_socket_id,
+            syn_cookie,
+            peer_ip_address,
+            extension_type: 0,
+            extension_length: 0,
+            extension_contents: vec![],
+        })
+    }
+}
+
+impl IsPacket for HandshakePacket {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        let mut body = Vec::new();
+        self.encode_body(&mut body).unwrap();
+
+        Packet {
+            header: self.header,
+            body,
+        }
+    }
+
+    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
+        let header = packet.header.as_control()?;
+        if header.control_type() != ControlPacketType::Handshake {
+            return Err(Error::InvalidControlType(header.control_type().to_u16()));
+        }
+
+        let mut this = Self::decode_body(&packet.body[..])?;
+        this.header = packet.header;
+
+        Ok(this)
+    }
+}
 
 impl Encode for HandshakePacket {
     type Error = Error;
@@ -442,7 +535,7 @@ pub enum EncryptionField {
 // +------------+----------------+
 // | 0x00000001 |   INDUCTION    |
 // +------------+----------------+
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum HandshakeType {
     #[default]
     Induction,
@@ -511,6 +604,15 @@ pub struct Packet {
     body: Vec<u8>,
 }
 
+impl Packet {
+    pub fn downcast<T>(self) -> Result<T, Error>
+    where
+        T: IsPacket<Error = Error>,
+    {
+        T::downcast(self)
+    }
+}
+
 impl Encode for Packet {
     type Error = Error;
 
@@ -548,8 +650,6 @@ impl<'a> ControlHeader<'a> {
     pub fn control_type(&self) -> ControlPacketType {
         let bits = self.header.seg0.bits(1..16).0;
 
-        println!("{:?}", bits);
-
         ControlPacketType::from_u32(bits).unwrap()
     }
 
@@ -567,9 +667,15 @@ impl<'a> DataHeader<'a> {
     // pub fn packet_position(&self) -> PacketPosition {}
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PacketPosition {
+    /// The packet is the first packet of the data stream.
     First,
+    /// The packet is in the middle of the data stream.
     Middle,
+    /// The packet is the last packet of the data stream.
+    Last,
+    /// The packet contains a full data stream.
     Full,
 }
 
@@ -628,4 +734,24 @@ impl Encode for AckPacket {
 
         Ok(())
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct PeerIpAddress([u8; 8]);
+
+impl PeerIpAddress {}
+
+/// A packet type.
+pub trait IsPacket: Sized {
+    type Error;
+
+    /// Upcasts this packet type into a generic [`Packet`].
+    fn upcast(self) -> Packet;
+
+    /// Attempts to downcast a generic [`Packet`] into this packet type. Returns an error if the
+    /// `packet` cannot be downcasted into this type.
+    ///
+    /// Note that `downcast` only reads from the front. Any bytes unnecessary for the downcasting
+    /// process will be dropped.
+    fn downcast(packet: Packet) -> Result<Self, Self::Error>;
 }

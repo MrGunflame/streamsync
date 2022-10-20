@@ -92,7 +92,7 @@ pub struct Bits<T>(pub T)
 where
     T: Bytes;
 
-impl<T: std::fmt::Debug> Bits<T>
+impl<T> Bits<T>
 where
     T: Bytes,
 {
@@ -106,7 +106,6 @@ where
         let start = self.0.bits() - range.end;
 
         let mask = ((1 << num) - 1) << start;
-        dbg!(mask);
 
         // let bits = self.0.bits() - 1 - range.start;
 

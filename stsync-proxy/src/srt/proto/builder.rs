@@ -1,6 +1,9 @@
-use crate::srt::{ControlPacketType, PacketType};
+use crate::{
+    proto::{Bits, U32},
+    srt::{ControlPacketType, PacketType},
+};
 
-use super::{Ack, Keepalive, LightAck};
+use super::{Ack, AckAck, Keepalive, LightAck};
 
 #[derive(Clone, Debug)]
 pub struct KeepaliveBuilder(Keepalive);
@@ -122,5 +125,31 @@ impl LightAckBuilder {
 impl Default for LightAckBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AckAckBuilder(AckAck);
+
+impl AckAckBuilder {
+    pub fn new() -> Self {
+        let mut packet = AckAck::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet
+            .header
+            .as_control()
+            .unwrap()
+            .set_control_type(ControlPacketType::AckAck);
+
+        Self(packet)
+    }
+
+    pub const fn acknowledgement_number(mut self, n: u32) -> Self {
+        self.0.header.seg1 = Bits(U32(n));
+        self
+    }
+
+    pub const fn build(self) -> AckAck {
+        self.0
     }
 }

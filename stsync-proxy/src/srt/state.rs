@@ -4,33 +4,54 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rand::rngs::OsRng;
+use rand::RngCore;
+
+use super::HandshakeType;
+
 #[derive(Clone, Debug)]
 pub struct State {
-    pub connections: Arc<Mutex<HashSet<Connection>>>,
+    pub pool: Arc<ConnectionPool>,
+    /// Pseudo RNG for all non-crypto randomness
+    // NOTE: This actually is a CSPRNG but it doesn't have to be.
+    pub prng: Arc<Mutex<OsRng>>,
 }
 
-#[derive(Debug)]
+impl State {
+    pub fn new() -> Self {
+        Self {
+            pool: Arc::new(ConnectionPool::default()),
+            prng: Arc::default(),
+        }
+    }
+
+    pub fn random(&self) -> u32 {
+        self.prng.lock().unwrap().next_u32()
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct ConnectionPool {
-    inner: HashSet<Connection>,
+    inner: Mutex<HashSet<Connection>>,
 }
 
 impl ConnectionPool {
-    pub fn insert(&mut self, conn: Connection) {
-        self.inner.insert(conn);
+    pub fn insert(&self, conn: Connection) {
+        self.inner.lock().unwrap().insert(conn);
     }
 
-    pub fn remove<T>(&mut self, conn: T)
+    pub fn remove<T>(&self, conn: T)
     where
         T: Borrow<SocketId>,
     {
-        self.inner.remove(conn.borrow());
+        self.inner.lock().unwrap().remove(conn.borrow());
     }
 
     pub fn get<T>(&self, conn: T) -> Option<Connection>
     where
         T: Borrow<SocketId>,
     {
-        self.inner.get(conn.borrow()).copied()
+        self.inner.lock().unwrap().get(conn.borrow()).copied()
     }
 }
 
@@ -47,6 +68,12 @@ pub struct Connection {
     pub server_socket_id: SocketId,
     /// Socket id of the the remote peer.
     pub client_socket_id: SocketId,
+    pub client_sequence_number: u32,
+    pub server_sequence_number: u32,
+    pub rtt: u32,
+    pub rtt_variance: u32,
+    pub state: HandshakeType,
+    pub syn_cookie: u32,
 }
 
 impl Connection {
@@ -59,11 +86,27 @@ impl Connection {
             start_time: Instant::now(),
             server_socket_id: server_socket_id.into(),
             client_socket_id: client_socket_id.into(),
+            client_sequence_number: 0,
+            server_sequence_number: 0,
+            // Default 100ms
+            rtt: 100_000,
+            // Default 50ms
+            rtt_variance: 50_000,
+            state: HandshakeType::Induction,
+            syn_cookie: 0,
         }
     }
 
     pub fn timestamp(&self) -> u32 {
         Instant::now().duration_since(self.start_time).as_millis() as u32
+    }
+
+    pub fn update_rtt(&mut self, rtt: u32) {
+        // See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.10
+        // Update RTT variance before RTT because the current RTT is required
+        // to calculate the RTT variance.
+        self.rtt_variance = (3 / 4) * self.rtt_variance + (1 / 4) * self.rtt.abs_diff(rtt);
+        self.rtt = (7 / 8) * self.rtt + (1 / 8) * rtt;
     }
 }
 

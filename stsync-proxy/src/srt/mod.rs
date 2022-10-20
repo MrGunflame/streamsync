@@ -1,15 +1,21 @@
 //! Secure Reliable Transport (SRT) implementation.
 //!
 //! https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01
+mod ack;
 mod conn;
+mod data;
 mod handshake;
 pub mod proto;
 pub mod server;
+mod shutdown;
 pub mod state;
 
 use conn::Connection;
 
-use std::io::{self, Read, Write};
+use std::{
+    convert::Infallible,
+    io::{self, Read, Write},
+};
 
 use tokio::net::UdpSocket;
 
@@ -109,7 +115,7 @@ pub struct DataPacket {
 }
 
 impl DataPacket {
-    pub fn initial_packet_sequence_number(&self) -> u32 {
+    pub fn packet_sequence_number(&self) -> u32 {
         self.header.seg0.bits(1..32).0
     }
 
@@ -147,6 +153,24 @@ impl DataPacket {
     pub fn message_number(&self) -> u32 {
         // 26 bits
         self.header.seg1.bits(6..32).0
+    }
+}
+
+impl IsPacket for DataPacket {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        Packet {
+            header: self.header,
+            body: self.data,
+        }
+    }
+
+    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
+        Ok(Self {
+            header: packet.header,
+            data: packet.body,
+        })
     }
 }
 

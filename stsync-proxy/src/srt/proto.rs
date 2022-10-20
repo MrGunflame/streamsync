@@ -1,10 +1,13 @@
 pub mod builder;
 
 use std::convert::Infallible;
+use std::io::{Read, Write};
 
-use crate::proto::Encode;
+use crate::proto::{Bits, Encode, U32};
 
-use self::builder::{AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder};
+use self::builder::{
+    AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, ShutdownBuilder,
+};
 
 use super::{ControlPacketType, Error, Header, InvalidControlType, IsPacket, Packet};
 
@@ -45,6 +48,35 @@ pub struct Ack {
 impl Ack {
     pub fn builder() -> AckBuilder {
         AckBuilder::new()
+    }
+
+    pub fn acknowledgement_number(&self) -> u32 {
+        self.header.seg1.0 .0
+    }
+
+    pub fn set_acknowledgement_number(&mut self, n: u32) {
+        self.header.seg1 = Bits(U32(n));
+    }
+}
+
+impl Encode for Ack {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.header.encode(&mut writer)?;
+        self.last_acknowledged_packet_sequence_number
+            .encode(&mut writer)?;
+        self.rtt.encode(&mut writer)?;
+        self.rtt_variance.encode(&mut writer)?;
+        self.avaliable_buffer_size.encode(&mut writer)?;
+        self.packets_receiving_rate.encode(&mut writer)?;
+        self.estimated_link_capacity.encode(&mut writer)?;
+        self.receiving_rate.encode(&mut writer)?;
+
+        Ok(())
     }
 }
 
@@ -121,6 +153,39 @@ impl IsPacket for AckAck {
     fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
         let header = packet.header.as_control()?;
         if header.control_type() != ControlPacketType::AckAck {
+            return Err(Error::InvalidControlType(header.control_type().to_u16()));
+        }
+
+        Ok(Self {
+            header: packet.header,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Shutdown {
+    header: Header,
+}
+
+impl Shutdown {
+    pub fn builder() -> ShutdownBuilder {
+        ShutdownBuilder::new()
+    }
+}
+
+impl IsPacket for Shutdown {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        Packet {
+            header: self.header,
+            body: Vec::new(),
+        }
+    }
+
+    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
+        let header = packet.header.as_control()?;
+        if header.control_type() != ControlPacketType::Shutdown {
             return Err(Error::InvalidControlType(header.control_type().to_u16()));
         }
 

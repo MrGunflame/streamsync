@@ -129,7 +129,7 @@ async fn handle_message(
                     super::handshake::handshake_new(packet, stream, state).await?;
                 }
                 Err(err) => {
-                    // tracing::debug!("Failed to downcast packet: {}", err);
+                    tracing::debug!("Failed to downcast packet: {}", err);
                 }
             }
 
@@ -149,12 +149,21 @@ async fn handle_message(
                     super::handshake::handshake(packet, stream, state).await?;
                 }
             }
+            ControlPacketType::Shutdown => {
+                if let Ok(packet) = packet.downcast() {
+                    super::shutdown::shutdown(packet, stream, state).await?;
+                }
+            }
             _ => {
                 tracing::warn!("Unhandled control packet");
             }
         },
         PacketType::Data => {
             println!("got data");
+
+            if let Ok(packet) = packet.downcast() {
+                super::data::handle_data(packet, stream, state).await?;
+            }
         }
     }
 

@@ -3,7 +3,7 @@ use crate::{
     srt::{ControlPacketType, PacketType},
 };
 
-use super::{Ack, AckAck, Keepalive, LightAck};
+use super::{Ack, AckAck, Keepalive, LightAck, Shutdown};
 
 #[derive(Clone, Debug)]
 pub struct KeepaliveBuilder(Keepalive);
@@ -151,5 +151,32 @@ impl AckAckBuilder {
 
     pub const fn build(self) -> AckAck {
         self.0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ShutdownBuilder(Shutdown);
+
+impl ShutdownBuilder {
+    pub fn new() -> Self {
+        let mut packet = Shutdown::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet
+            .header
+            .as_control()
+            .unwrap()
+            .set_control_type(ControlPacketType::Shutdown);
+
+        Self(packet)
+    }
+
+    pub const fn build(self) -> Shutdown {
+        self.0
+    }
+}
+
+impl Default for ShutdownBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }

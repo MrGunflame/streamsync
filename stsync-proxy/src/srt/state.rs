@@ -74,6 +74,9 @@ pub struct Connection {
     pub rtt_variance: u32,
     pub state: HandshakeType,
     pub syn_cookie: u32,
+
+    /// Timestamp of the last ACK. We use this to calculate the RTT when receiving an ACKCAK.
+    pub last_ack_timestamp: Instant,
 }
 
 impl Connection {
@@ -94,6 +97,7 @@ impl Connection {
             rtt_variance: 50_000,
             state: HandshakeType::Induction,
             syn_cookie: 0,
+            last_ack_timestamp: Instant::now(),
         }
     }
 

@@ -81,22 +81,11 @@ pub async fn handshake(
     mut stream: SrtConnStream<'_>,
     state: State,
 ) -> Result<(), Error> {
-    dbg!(packet.handshake_type);
-
     // A client may not know that we know them.
-    if packet.handshake_type == HandshakeType::Induction {
+    if packet.handshake_type != HandshakeType::Conclusion {
         return handshake_new(packet, stream.stream, state).await;
     }
 
-    // If any values are incorrect, reset the connection state.
-    // if packet.version != 5
-    //     || packet.handshake_type != HandshakeType::Conclusion
-    //     || packet.encryption_field != 0
-    //     || packet.syn_cookie != stream.conn.syn_cookie
-    // {
-    //     state.pool.remove(stream.conn);
-    //     return Ok(());
-    // }
     srt_assert!(packet.handshake_type, HandshakeType::Conclusion);
     srt_assert!(packet.version, 5);
     srt_assert!(packet.encryption_field, 0);

@@ -1,3 +1,4 @@
+//! Output sinks
 use std::collections::HashMap;
 
 use futures::{Sink, SinkExt};
@@ -7,6 +8,7 @@ pub struct OutputSink<S>
 where
     S: Sink<Vec<u8>>,
 {
+    /// Sequence number of the next expected segment.
     next_seqnum: u32,
     sink: S,
     queue: HashMap<u32, Vec<u8>>,
@@ -30,6 +32,11 @@ where
     }
 
     pub async fn push(&mut self, seqnum: u32, buf: Vec<u8>) -> Result<(), S::Error> {
+        // We already assumed the packets to be lost and skipped ahead.
+        if self.next_seqnum > seqnum {
+            return Ok(());
+        }
+
         if self.next_seqnum == seqnum {
             tracing::trace!("Segment {} is in order", seqnum);
 
@@ -56,5 +63,9 @@ where
         }
 
         Ok(())
+    }
+
+    pub async fn close(&mut self) -> Result<(), S::Error> {
+        self.sink.close().await
     }
 }

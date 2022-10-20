@@ -3,7 +3,7 @@ use crate::{
     srt::{ControlPacketType, PacketType},
 };
 
-use super::{Ack, AckAck, Keepalive, LightAck, Shutdown};
+use super::{Ack, AckAck, Keepalive, LightAck, Nak, Shutdown};
 
 #[derive(Clone, Debug)]
 pub struct KeepaliveBuilder(Keepalive);
@@ -150,6 +150,32 @@ impl AckAckBuilder {
     }
 
     pub const fn build(self) -> AckAck {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NakBuilder(Nak);
+
+impl NakBuilder {
+    pub fn new() -> Self {
+        let mut packet = Nak::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet
+            .header
+            .as_control()
+            .unwrap()
+            .set_control_type(ControlPacketType::Nak);
+
+        Self(packet)
+    }
+
+    pub fn lost_packet_sequence_number(mut self, n: u32) -> Self {
+        self.0.set_lost_packet_sequence_number(n);
+        self
+    }
+
+    pub const fn build(self) -> Nak {
         self.0
     }
 }

@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use crate::proto::{Bits, Encode, U32};
 
 use self::builder::{
-    AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, ShutdownBuilder,
+    AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder, ShutdownBuilder,
 };
 
 use super::{ControlPacketType, Error, Header, InvalidControlType, IsPacket, Packet};
@@ -124,7 +124,7 @@ pub struct SmallAck {}
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 #[derive(Clone, Debug, Default)]
 pub struct AckAck {
-    header: Header,
+    pub header: Header,
 }
 
 impl AckAck {
@@ -159,6 +159,41 @@ impl IsPacket for AckAck {
         Ok(Self {
             header: packet.header,
         })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Nak {
+    pub header: Header,
+    pub lost_packet_sequence_number: Bits<U32>,
+}
+
+impl Nak {
+    pub fn builder() -> NakBuilder {
+        NakBuilder::new()
+    }
+
+    pub fn lost_packet_sequence_number(&self) -> u32 {
+        self.lost_packet_sequence_number.bits(1..32).0
+    }
+
+    pub fn set_lost_packet_sequence_number(&mut self, n: u32) {
+        self.lost_packet_sequence_number.set_bits(0, 0);
+        self.lost_packet_sequence_number.set_bits(1..32, n);
+    }
+}
+
+impl Encode for Nak {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.header.encode(&mut writer)?;
+        self.lost_packet_sequence_number.encode(&mut writer)?;
+
+        Ok(())
     }
 }
 

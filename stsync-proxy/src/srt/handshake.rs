@@ -4,6 +4,7 @@ use super::server::{SrtConnStream, SrtStream};
 use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::proto::Encode;
+use crate::sink::MultiSink;
 
 static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -20,11 +21,14 @@ macro_rules! srt_assert {
 
 /// Handles a new incoming handshake. This is the only packet that should be handled on
 /// unknown connection streams.
-pub async fn handshake_new(
+pub async fn handshake_new<S>(
     packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State,
-) -> Result<(), Error> {
+    state: State<S>,
+) -> Result<(), Error>
+where
+    S: MultiSink,
+{
     tracing::trace!("INDUCTION");
 
     // Check if the handshake induction is valid.
@@ -76,11 +80,14 @@ pub async fn handshake_new(
     Ok(())
 }
 
-pub async fn handshake(
+pub async fn handshake<S>(
     mut packet: HandshakePacket,
-    mut stream: SrtConnStream<'_>,
-    state: State,
-) -> Result<(), Error> {
+    mut stream: SrtConnStream<'_, S>,
+    state: State<S>,
+) -> Result<(), Error>
+where
+    S: MultiSink,
+{
     // A client may not know that we know them.
     if packet.handshake_type != HandshakeType::Conclusion {
         return handshake_new(packet, stream.stream, state).await;

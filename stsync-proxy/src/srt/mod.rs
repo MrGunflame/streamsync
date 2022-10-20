@@ -8,16 +8,10 @@ mod handshake;
 pub mod proto;
 pub mod server;
 mod shutdown;
+mod sink;
 pub mod state;
 
-use conn::Connection;
-
-use std::{
-    convert::Infallible,
-    io::{self, Read, Write},
-};
-
-use tokio::net::UdpSocket;
+use std::io::{self, Read, Write};
 
 use crate::proto::{Bits, Decode, Encode, U32};
 

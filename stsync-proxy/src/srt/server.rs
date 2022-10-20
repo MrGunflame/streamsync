@@ -14,19 +14,21 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 
 use super::state::{Connection, SocketId, State};
 use crate::proto::{Bits, Decode, Encode};
+use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::{AckPacket, ControlPacketType, PacketType};
 
 use super::{Error, Packet};
 
-pub async fn serve<A>(addr: A) -> Result<(), io::Error>
+pub async fn serve<A, S>(addr: A, sink: S) -> Result<(), io::Error>
 where
     A: ToSocketAddrs,
+    S: MultiSink,
 {
     let socket = UdpSocket::bind(addr).await?;
     tracing::info!("Listing on {}", socket.local_addr()?);
 
-    let state = State::new();
+    let state = State::new(sink);
 
     let mut file = std::fs::File::create("out.ts").unwrap();
 
@@ -103,19 +105,21 @@ where
 
 // socket.send_to(&buf, addr).await.unwrap();
 
-async fn handle_message(
+async fn handle_message<S>(
     mut packet: Packet,
     addr: SocketAddr,
     socket: Arc<UdpSocket>,
-    state: State,
-) -> Result<(), Error> {
+    state: State<S>,
+) -> Result<(), Error>
+where
+    S: MultiSink,
+{
     let stream = SrtStream {
         socket: &socket,
         addr,
     };
 
     tracing::debug!("{}", packet.header.destination_socket_id);
-    tracing::debug!("{:?}", state.pool);
 
     let stream = match state
         .pool
@@ -149,20 +153,24 @@ async fn handle_message(
                     super::handshake::handshake(packet, stream, state).await?;
                 }
             }
-            ControlPacketType::Shutdown => {
-                if let Ok(packet) = packet.downcast() {
-                    super::shutdown::shutdown(packet, stream, state).await?;
-                }
-            }
+            ControlPacketType::AckAck => match packet.downcast() {
+                Ok(packet) => super::ack::ackack(packet, stream, state).await?,
+                Err(err) => tracing::trace!("Failed to downcast packet to AckAck: {}", err),
+            },
+            ControlPacketType::Shutdown => match packet.downcast() {
+                Ok(packet) => super::shutdown::shutdown(packet, stream, state).await?,
+                Err(err) => tracing::trace!("Failed to downcast packet to Shutdown: {}", err),
+            },
             _ => {
                 tracing::warn!("Unhandled control packet");
             }
         },
         PacketType::Data => {
-            println!("got data");
+            // println!("got data");
 
-            if let Ok(packet) = packet.downcast() {
-                super::data::handle_data(packet, stream, state).await?;
+            match packet.downcast() {
+                Ok(packet) => super::data::handle_data(packet, stream, state).await?,
+                Err(err) => tracing::trace!("Failed to downcast to DataPacket: {}", err),
             }
         }
     }
@@ -183,12 +191,18 @@ impl<'a> SrtStream<'a> {
 }
 
 /// A SrtStream with an associated connection.
-pub struct SrtConnStream<'a> {
+pub struct SrtConnStream<'a, M>
+where
+    M: MultiSink,
+{
     pub stream: SrtStream<'a>,
-    pub conn: Connection,
+    pub conn: Connection<M::Sink>,
 }
 
-impl<'a> SrtConnStream<'a> {
+impl<'a, M> SrtConnStream<'a, M>
+where
+    M: MultiSink,
+{
     pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         self.stream.send(buf).await
     }
@@ -295,6 +309,9 @@ impl Stream for Buffer {
     }
 }
 
-async fn keepalive(packet: Packet, state: &Arc<State>, socket: &Arc<UdpSocket>) {
+async fn keepalive<S>(packet: Packet, state: &Arc<State<S>>, socket: &Arc<UdpSocket>)
+where
+    S: MultiSink,
+{
     let mut resp = Keepalive::builder().build();
 }

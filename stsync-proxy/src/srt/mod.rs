@@ -1,12 +1,19 @@
 //! Secure Reliable Transport (SRT) implementation.
 //!
 //! https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01
+mod conn;
+mod handshake;
+pub mod proto;
+pub mod server;
+pub mod state;
+
+use conn::Connection;
 
 use std::io::{self, Read, Write};
 
 use tokio::net::UdpSocket;
 
-use crate::proto::{Decode, Encode};
+use crate::proto::{Bits, Decode, Encode, U32};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,25 +21,38 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("invalid handshake type: {0}")]
     InvalidHandshakeType(u32),
+    #[error("invalid control type: {0}")]
+    InvalidControlType(u16),
 }
 
 /// SRT header followed directly by UDP header.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Header {
-    oct0: u32,
-    oct1: u32,
+    /// First bit indicates packet type: 0 = Data, 1 = Control.
+    /// The rest is packet type dependent.
+    seg0: Bits<U32>,
+    /// Packet type dependant.
+    seg1: Bits<U32>,
     timestamp: u32,
     destination_socket_id: u32,
 }
 
 impl Header {
-    pub fn flag(&self) -> PacketType {
+    pub fn packet_type(&self) -> PacketType {
         // First BE bit.
-        if self.oct0 & (1 << 31) == 0 {
-            PacketType::Data
-        } else {
-            PacketType::Control
+        match self.seg0.bits(0).0 {
+            0 => PacketType::Data,
+            1 => PacketType::Control,
+            _ => unreachable!(),
         }
+    }
+
+    pub fn set_packet_type(&mut self, type_: PacketType) {
+        self.seg0.set_bits(0, type_.to_u32());
+    }
+
+    pub fn as_control(&mut self) -> Result<ControlHeader, Error> {
+        Ok(ControlHeader { header: self })
     }
 }
 
@@ -43,8 +63,8 @@ impl Encode for Header {
     where
         W: Write,
     {
-        self.oct0.encode(&mut writer)?;
-        self.oct1.encode(&mut writer)?;
+        self.seg0.encode(&mut writer)?;
+        self.seg1.encode(&mut writer)?;
         self.timestamp.encode(&mut writer)?;
         self.destination_socket_id.encode(&mut writer)?;
 
@@ -59,45 +79,50 @@ impl Decode for Header {
     where
         R: Read,
     {
-        let oct0 = u32::decode(&mut reader)?;
-        let oct1 = u32::decode(&mut reader)?;
-        let timestamp = u32::decode(&mut reader)?;
-        let destination_socket_id = u32::decode(&mut reader)?;
+        let seg0 = Decode::decode(&mut reader)?;
+        let seg1 = Decode::decode(&mut reader)?;
+        let timestamp = Decode::decode(&mut reader)?;
+        let destination_socket_id = Decode::decode(&mut reader)?;
 
         Ok(Self {
-            oct0,
-            oct1,
+            seg0,
+            seg1,
             timestamp,
             destination_socket_id,
         })
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct DataPacket {
     header: Header,
-    // TODO: impl
     data: Vec<u8>,
 }
 
 impl DataPacket {
-    pub fn packet_sequence_number(&self) -> u32 {
-        self.header.oct0 >> 1
+    pub fn initial_packet_sequence_number(&self) -> u32 {
+        self.header.seg0.bits(1..32).0
     }
 
-    pub fn packet_position_flag(&self) -> u8 {
-        self.header.oct1 as u8 & 0b11
+    pub fn packet_position_flag(&self) -> PacketPosition {
+        match self.header.seg1.bits(0..2).0 {
+            0b10 => PacketPosition::First,
+            0b00 => PacketPosition::Middle,
+            0b11 => PacketPosition::Full,
+            _ => unreachable!(),
+        }
     }
 
     pub fn order_flag(&self) -> OrderFlag {
-        match (self.header.oct1 as u8 >> 2) & 0b1 {
-            0 => OrderFlag::NotInOrder,
+        match self.header.seg1.bits(2).0 {
             1 => OrderFlag::InOrder,
+            0 => OrderFlag::NotInOrder,
             _ => unreachable!(),
         }
     }
 
     pub fn encryption_flag(&self) -> EncryptionFlag {
-        match (self.header.oct1 as u8 >> 3) & 0b11 {
+        match self.header.seg1.bits(3..5).0 {
             0b00 => EncryptionFlag::None,
             0b01 => EncryptionFlag::Even,
             0b11 => EncryptionFlag::Odd,
@@ -105,13 +130,43 @@ impl DataPacket {
         }
     }
 
+    /// 1 if packet was retransmitted.
     pub fn retransmission_flag(&self) -> u8 {
-        (self.header.oct1 as u8 >> 5) & 0b1
+        self.header.seg1.bits(5).0 as u8
     }
 
     pub fn message_number(&self) -> u32 {
         // 26 bits
-        self.header.oct1 >> 6
+        self.header.seg1.bits(6..32).0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ShutdownPacket {
+    header: Header,
+}
+
+impl Encode for ShutdownPacket {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.header.encode(writer)
+    }
+}
+
+impl Decode for ShutdownPacket {
+    type Error = Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let header = Header::decode(reader)?;
+
+        Ok(Self { header })
     }
 }
 
@@ -119,6 +174,15 @@ impl DataPacket {
 pub enum PacketType {
     Data,
     Control,
+}
+
+impl PacketType {
+    pub fn to_u32(self) -> u32 {
+        match self {
+            Self::Data => 0x0,
+            Self::Control => 0x01,
+        }
+    }
 }
 
 pub enum OrderFlag {
@@ -138,7 +202,7 @@ pub struct ControlPacket {
 
 impl ControlPacket {
     pub fn control_type(&self) -> ControlPacketType {
-        match self.header.oct0 as u16 >> 1 {
+        match self.header.seg0.bits(1..16).0 as u16 {
             0x0000 => ControlPacketType::Handshake,
             0x0001 => ControlPacketType::Keepalive,
             0x0002 => ControlPacketType::Ack,
@@ -153,11 +217,16 @@ impl ControlPacket {
         }
     }
 
+    pub fn set_control_type(&mut self, type_: ControlPacketType) {
+        self.header.seg0.set_bits(1..16, type_.to_u16() as u32)
+    }
+
     pub fn subtype(&self) -> ControlSubType {
         unimplemented!()
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ControlPacketType {
     Handshake = 0x00,
     Keepalive = 0x01,
@@ -169,6 +238,59 @@ pub enum ControlPacketType {
     DropReq = 0x07,
     PeerError = 0x08,
     UserDefined = 0x7FFF,
+}
+
+impl ControlPacketType {
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0x0000 => Some(Self::Handshake),
+            0x0001 => Some(Self::Keepalive),
+            0x0002 => Some(Self::Ack),
+            0x0003 => Some(Self::Nak),
+            0x0004 => Some(Self::CongestionWarning),
+            0x0005 => Some(Self::Shutdown),
+            0x0006 => Some(Self::AckAck),
+            0x0007 => Some(Self::DropReq),
+            0x0008 => Some(Self::PeerError),
+            0x7FFF => Some(Self::UserDefined),
+            _ => None,
+        }
+    }
+
+    pub fn to_u16(self) -> u16 {
+        match self {
+            Self::Handshake => 0x00,
+            Self::Keepalive => 0x01,
+            Self::Ack => 0x02,
+            Self::Nak => 0x03,
+            Self::CongestionWarning => 0x04,
+            Self::Shutdown => 0x05,
+            Self::AckAck => 0x06,
+            Self::DropReq => 0x07,
+            Self::PeerError => 0x08,
+            Self::UserDefined => 0x7FFF,
+        }
+    }
+}
+
+impl TryFrom<u16> for ControlPacketType {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        match value {
+            0x0000 => Ok(Self::Handshake),
+            0x0001 => Ok(Self::Keepalive),
+            0x0002 => Ok(Self::Ack),
+            0x0003 => Ok(Self::Nak),
+            0x0004 => Ok(Self::CongestionWarning),
+            0x0005 => Ok(Self::Shutdown),
+            0x0006 => Ok(Self::AckAck),
+            0x0007 => Ok(Self::DropReq),
+            0x0008 => Ok(Self::PeerError),
+            0x7FFF => Ok(Self::UserDefined),
+            _ => Err(()),
+        }
+    }
 }
 
 pub enum ControlSubType {}
@@ -383,76 +505,127 @@ pub struct Keepalive {
     header: Header,
 }
 
-pub async fn handshake(mut stream: UdpSocket) -> Result<Connection, Error> {
-    // Ethernet frame size for now.
-    // TODO: Only stack-allocate the required size for HandshakePacket.
-    let mut buf = [0; 1500];
-
-    // Induction phase
-    let (_, addr) = stream.recv_from(&mut buf).await?;
-
-    let packet = HandshakePacket::decode(&buf[..])?;
-
-    println!("{:?}", packet);
-
-    assert_eq!(packet.header.flag(), PacketType::Control);
-    assert_eq!(packet.version, 4);
-    assert_eq!(packet.encryption_field, 0);
-    assert_eq!(packet.extension_field, 2);
-    assert_eq!(packet.handshake_type, HandshakeType::Induction);
-    assert_eq!(packet.syn_cookie, 0);
-
-    let caller_socket_id = packet.srt_socket_id;
-    let listener_socket_id = 69u32;
-
-    println!("Got valid INDUCTION from caller");
-
-    let mut resp = HandshakePacket::default();
-    resp.header.oct0 = 1 << 31;
-    resp.header.timestamp = packet.header.timestamp + 1;
-
-    resp.initial_packet_sequence_number = 12345;
-    resp.maximum_transmission_unit_size = 1500;
-    resp.maximum_flow_window_size = 8192;
-    resp.peer_ip_address += u32::from_be_bytes([127, 0, 0, 1]) as u128;
-
-    // SRT
-    resp.version = 5;
-    resp.encryption_field = 0;
-    resp.extension_field = 0x4A17;
-    resp.handshake_type = HandshakeType::Induction;
-    resp.srt_socket_id = listener_socket_id;
-    // "random"
-    resp.syn_cookie = 420;
-
-    let mut buf = Vec::new();
-    resp.encode(&mut buf)?;
-    stream.send_to(&buf, addr).await?;
-
-    println!("{:?}", resp);
-    println!("{:?}", buf);
-    println!("Send INDUCTION to caller");
-
-    // Conclusion
-
-    let mut buf = [0; 1500];
-    let (_, addr) = stream.recv_from(&mut buf).await?;
-
-    let packet = HandshakePacket::decode(&buf[..])?;
-
-    println!("{:?}", packet);
-
-    assert_eq!(packet.version, 5);
-    assert_eq!(packet.handshake_type, HandshakeType::Conclusion);
-    assert_eq!(packet.srt_socket_id, caller_socket_id);
-    assert_eq!(packet.syn_cookie, 69);
-    assert_eq!(packet.encryption_field, 0);
-
-    println!("Got Valid CONCLUSION from caller");
-
-    stream.send_to(&buf, addr).await?;
-
-    Ok(Connection {})
+#[derive(Clone, Debug)]
+pub struct Packet {
+    header: Header,
+    body: Vec<u8>,
 }
 
-pub struct Connection {}
+impl Encode for Packet {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.header.encode(&mut writer)?;
+        self.body.encode(&mut writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for Packet {
+    type Error = Error;
+
+    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let header = Header::decode(&mut reader)?;
+        let body = Vec::decode(reader)?;
+
+        Ok(Self { header, body })
+    }
+}
+
+/// Header for a control packet.
+#[derive(Debug)]
+pub struct ControlHeader<'a> {
+    header: &'a mut Header,
+}
+
+impl<'a> ControlHeader<'a> {
+    pub fn control_type(&self) -> ControlPacketType {
+        let bits = self.header.seg0.bits(1..16).0;
+
+        println!("{:?}", bits);
+
+        ControlPacketType::from_u32(bits).unwrap()
+    }
+
+    pub fn set_control_type(&mut self, type_: ControlPacketType) {
+        self.header.seg0.set_bits(1..16, type_.to_u16() as u32)
+    }
+}
+
+/// Header for a data packet.
+pub struct DataHeader<'a> {
+    header: &'a Header,
+}
+
+impl<'a> DataHeader<'a> {
+    // pub fn packet_position(&self) -> PacketPosition {}
+}
+
+pub enum PacketPosition {
+    First,
+    Middle,
+    Full,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AckPacket {
+    header: Header,
+    /// This field
+    /// contains the sequence number of the last data packet being
+    /// acknowledged plus one.  In other words, if it the sequence number
+    /// of the first unacknowledged packet.
+    last_acknowledged_packet_sequence_number: u32,
+    /// RTT value, in microseconds, estimated by the receiver
+    /// based on the previous ACK/ACKACK packet pair exchange.
+    rtt: u32,
+    /// The variance of the RTT estimate, in
+    /// microseconds.
+    rtt_variance: u32,
+    /// Available size of the receiver's
+    /// buffer, in packets.
+    avaliable_buffer_size: u32,
+    /// The rate at which packets are being
+    /// received, in packets per second.
+    packets_receiving_rate: u32,
+    /// Estimated bandwidth of the link,
+    /// in packets per second.
+    estimated_link_capacity: u32,
+    /// Estimated receiving rate, in bytes per
+    /// second.
+    receiving_rate: u32,
+}
+
+impl AckPacket {
+    /// This field contains the sequential
+    /// number of the full acknowledgment packet starting from 1.
+    pub fn acknowledgement_number(&self) -> u32 {
+        self.header.seg1.0 .0
+    }
+}
+
+impl Encode for AckPacket {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.header.encode(&mut writer)?;
+        self.last_acknowledged_packet_sequence_number
+            .encode(&mut writer)?;
+        self.rtt.encode(&mut writer)?;
+        self.rtt_variance.encode(&mut writer)?;
+        self.avaliable_buffer_size.encode(&mut writer)?;
+        self.packets_receiving_rate.encode(&mut writer)?;
+        self.estimated_link_capacity.encode(&mut writer)?;
+        self.receiving_rate.encode(&mut writer)?;
+
+        Ok(())
+    }
+}

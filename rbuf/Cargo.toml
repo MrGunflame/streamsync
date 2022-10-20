@@ -3,10 +3,7 @@ name = "rbuf"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-libc = "0.2.134"
 gstreamer = { version = "0.18.8", features = ["v1_16"] }
 gstreamer-app = "0.18.7"
 gstreamer-player = "0.18.0"
@@ -14,3 +11,6 @@ tokio = { version = "1.21.2", features = ["full"] }
 futures = "0.3.24"
 tracing = { version = "0.1.37", features = ["log-always"] }
 pretty_env_logger = "0.4.0"
+serde = { version = "1.0.145", features = ["derive"] }
+toml = "0.5.9"
+crossbeam = "0.8.2"

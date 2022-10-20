@@ -1,13 +1,11 @@
-use std::os::unix::prelude::AsRawFd;
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::marker::PhantomData;
+use std::sync::Arc;
 
 use futures::StreamExt;
 use gstreamer::{
-    element_error, element_warning, gst_warning, prelude::*, ClockTime, Element, ElementFactory,
-    GenericFormattedValue, MessageView, Pipeline, State,
+    element_warning, prelude::*, ClockTime, Element, ElementFactory, MessageView, Pipeline, State,
 };
-use gstreamer_app::AppSrc;
+use tracing::{event, span, Level};
 
 use crate::buffer::VideoBuffer;
 use crate::size::Size;
@@ -25,55 +23,76 @@ const URI: &str = "http://devimages.apple.com/iphone/samples/bipbop/gear4/prog_i
 // is scheduled Segment::start at PTS of the first frame (e.g. 20s). This causes the stream to only
 // start playing at PTS + Segment::start (e.g. 40s) causing a PTS delay (e.g. 40s - 20s).
 
-fn create_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
+fn create_pipeline(buf: Arc<VideoBuffer>, src: crate::Source) -> Pipeline {
     let pipeline = Pipeline::new(None);
 
-    let src = gstreamer::ElementFactory::make("souphttpsrc", None).unwrap();
-    src.set_property("location", URI);
-
-    // let src = gstreamer::ElementFactory::make("filesrc", None).unwrap();
-    // src.set_property("location", super::PATH2);
-
-    let hlsdemux = HlsDemux::new();
-    let decodebin = DecodeBin::new(&pipeline, buf);
+    let src = SoupHttpSrc::new(&src.location).unwrap();
+    let hlsdemux = HlsDemux::new().unwrap();
+    let decodebin = DecodeBin::new(&pipeline, buf).unwrap();
 
     pipeline
-        .add_many(&[&src, &hlsdemux.element, &decodebin.element])
+        .add_many(&[&src.element, &hlsdemux.element, &decodebin.element])
         .unwrap();
 
-    src.link(&hlsdemux.element).unwrap();
-    // pipeline.add(&src).unwrap();
+    src.link(&hlsdemux);
 
     hlsdemux.build(decodebin);
 
-    // src.link(&decodebin.element).unwrap();
-
     pipeline
 }
 
-fn handle_demux_pad_added(
-    demuxer: &gstreamer::Element,
-    demux_src_pad: &gstreamer::Pad,
-    queue: &gstreamer::Element,
-    muxer: &gstreamer::Element,
-) {
-    tracing::debug!("[HLSDEMUX] handle_demux_pad_added");
+#[derive(Debug)]
+pub struct FileSrc {
+    element: Element,
+}
 
-    let queue_sink_pad = queue.request_pad_simple("sink_%u").unwrap();
-    demux_src_pad.link(&queue_sink_pad).unwrap();
+impl FileSrc {
+    pub fn new(location: &str) -> Result<Self, Error> {
+        let element = create_element("filesrc")?;
+        element.set_property("location", location);
 
-    let queue_src_pad = queue_sink_pad
-        .iterate_internal_links()
-        .next()
-        .unwrap()
-        .unwrap();
+        Ok(Self { element })
+    }
+}
 
-    let muxer_sink_pad = muxer.compatible_pad(&queue_src_pad, None).unwrap();
+impl<T> Source<T> for FileSrc where T: MediaFormat {}
 
-    queue_src_pad.link(&muxer_sink_pad).unwrap();
+impl AsRef<Element> for FileSrc {
+    fn as_ref(&self) -> &Element {
+        &self.element
+    }
+}
+
+/// A raw HTTP fetch source element.
+///
+/// `Source<Http>`
+///
+/// https://gstreamer.freedesktop.org/documentation/soup/souphttpsrc.html
+#[derive(Clone, Debug)]
+pub struct SoupHttpSrc {
+    element: Element,
+}
+
+impl SoupHttpSrc {
+    pub fn new(location: &str) -> Result<Self, Error> {
+        let element = create_element("souphttpsrc")?;
+        element.set_property("location", location);
+
+        Ok(Self { element })
+    }
+}
+
+impl Source<Http> for SoupHttpSrc {}
+
+impl AsRef<Element> for SoupHttpSrc {
+    fn as_ref(&self) -> &Element {
+        &self.element
+    }
 }
 
 /// A `DecodeBin` element demuxes an encoded stream into raw video/audio data.
+///
+/// `Sink<Hls> => Source<PcmVideo>, Source<PcmAudio>`
 ///
 /// https://gstreamer.freedesktop.org/documentation/playback/decodebin.html
 #[derive(Clone, Debug)]
@@ -82,13 +101,15 @@ pub struct DecodeBin {
 }
 
 impl DecodeBin {
-    pub fn new(pipeline: &Pipeline, buf: Arc<VideoBuffer>) -> Self {
-        let element = ElementFactory::make("decodebin", None).unwrap();
+    pub fn new(pipeline: &Pipeline, buf: Arc<VideoBuffer>) -> Result<Self, Error> {
+        let element = create_element("decodebin")?;
+
+        let span = span!(target: "decodebin", Level::TRACE, "");
 
         let pipeline = pipeline.downgrade();
         let buf_clone = buf.clone();
         element.connect_pad_added(move |dbin, src_pad| {
-            tracing::debug!("[DECODEBIN] connect_pad_added");
+            event!(parent: &span, Level::TRACE, "connect_pad_added");
 
             let buf = buf_clone.clone();
             println!("{:?}", src_pad.caps());
@@ -180,7 +201,7 @@ impl DecodeBin {
             // }
         });
 
-        Self { element }
+        Ok(Self { element })
     }
 }
 
@@ -190,21 +211,28 @@ impl AsRef<Element> for DecodeBin {
     }
 }
 
+impl Sink<Hls> for DecodeBin {}
+
+impl Source<PcmVideo> for DecodeBin {}
+impl Source<PcmAudio> for DecodeBin {}
+
 #[derive(Clone, Debug)]
 pub struct HlsDemux {
     element: gstreamer::Element,
 }
 
 impl HlsDemux {
-    pub fn new() -> Self {
-        let hlsdemux = ElementFactory::make("hlsdemux", None).unwrap();
+    pub fn new() -> Result<Self, Error> {
+        let element = create_element("hlsdemux")?;
 
-        Self { element: hlsdemux }
+        Ok(Self { element })
     }
 
     pub fn build(&self, sink: DecodeBin) {
+        let span = span!(target: "hlsdemux", Level::TRACE, "");
+
         self.element.connect_pad_added(move |demuxer, src_pad| {
-            tracing::debug!("[HLSDEMUX] handle_demux_pad_added");
+            event!(parent: &span, Level::TRACE, "connect_pad_added");
 
             let sink_pad = sink.element.static_pad("sink").unwrap();
             src_pad.link(&sink_pad).unwrap();
@@ -220,6 +248,10 @@ impl AsRef<Element> for HlsDemux {
     }
 }
 
+impl Sink<Http> for HlsDemux {}
+
+impl Source<Hls> for HlsDemux {}
+
 #[derive(Clone, Debug)]
 pub struct AppSink {
     element: gstreamer_app::AppSink,
@@ -229,41 +261,16 @@ impl AppSink {
     pub fn new(buf: Arc<VideoBuffer>) -> Self {
         let sink = ElementFactory::make("appsink", None).unwrap();
 
+        let span = span!(target: "appsink", Level::DEBUG, "");
+
         let appsink = sink.dynamic_cast::<gstreamer_app::AppSink>().unwrap();
         appsink.set_callbacks(
             gstreamer_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
                     let sample = sink.pull_sample().unwrap();
-                    tracing::debug!("{:?}", sample);
+                    event!(parent: &span, Level::DEBUG, "{:?}", sample);
 
-                    // let buffer = sample
-                    //     .buffer()
-                    //     .ok_or_else(|| {
-                    //         element_error!(
-                    //             sink,
-                    //             gstreamer::ResourceError::Failed,
-                    //             ("Failed to get buffer from appsink")
-                    //         );
-                    //     })
-                    //     .unwrap();
-
-                    // let map = buffer
-                    //     .map_readable()
-                    //     .map_err(|_| {
-                    //         element_error!(
-                    //             sink,
-                    //             gstreamer::ResourceError::Failed,
-                    //             ("Failed to map buffer readable")
-                    //         );
-                    //     })
-                    //     .unwrap();
-
-                    // println!("{:?}", map.len());
-                    // println!("{:?}", map);
-
-                    // buf.set_frame_size(map.len());
                     buf.write_buf(sample);
-                    // buf.write(&map);
 
                     Ok(gstreamer::FlowSuccess::Ok)
                 })
@@ -274,16 +281,57 @@ impl AppSink {
     }
 }
 
+/// A queue of any [`MediaFormat`], blocking once full.
+///
+/// `Sink<T> => Source<T>`
+///
+/// https://gstreamer.freedesktop.org/documentation/coreelements/queue.html
+#[derive(Clone, Debug)]
+pub struct Queue<T>
+where
+    T: MediaFormat,
+{
+    element: Element,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Queue<T>
+where
+    T: MediaFormat,
+{
+    pub fn new(size: Size) -> Self {
+        assert!(size.get() <= u32::MAX as usize);
+
+        let element = ElementFactory::make("queue", None).unwrap();
+        element.set_property("max-size-buffers", 0u32);
+        element.set_property("max-size-bytes", size.to_u32());
+
+        Self {
+            element,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> AsRef<Element> for Queue<T>
+where
+    T: MediaFormat,
+{
+    fn as_ref(&self) -> &Element {
+        &self.element
+    }
+}
+
+impl<T> Sink<T> for Queue<T> where T: MediaFormat {}
+
+impl<T> Source<T> for Queue<T> where T: MediaFormat {}
+
 fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     let pipeline = Pipeline::new(None);
 
     let src = ElementFactory::make("appsrc", None).unwrap();
-    //let videoconvert = ElementFactory::make("videoconvert", None).unwrap();
-    let queue = ElementFactory::make("queue", None).unwrap();
-    queue.set_property("max-size-buffers", 0u32);
-    queue.set_property("max-size-bytes", Size::gib(1).to_u32());
-
-    let sink = ElementFactory::make("autovideosink", None).unwrap();
+    let queue = Queue::new(Size::gib(1));
+    let sink = AutoVideoSink::new();
 
     let appsrc = src.downcast_ref::<gstreamer_app::AppSrc>().unwrap();
     appsrc.set_format(gstreamer::Format::Time);
@@ -291,52 +339,19 @@ fn playback_pipeline(buf: Arc<VideoBuffer>) -> Pipeline {
     appsrc.set_do_timestamp(true);
     appsrc.set_latency(Some(ClockTime::SECOND), Some(ClockTime::SECOND * 60));
 
-    pipeline.add_many(&[&src, &queue, &sink]).unwrap();
-    gstreamer::Element::link_many(&[&src, &queue, &sink]).unwrap();
+    pipeline
+        .add_many(&[&src, &queue.element, &sink.element])
+        .unwrap();
+
+    src.link(&queue.element).unwrap();
+    queue.link(&sink);
 
     appsrc.set_callbacks(
         gstreamer_app::AppSrcCallbacks::builder()
             .need_data(move |appsrc, len| {
                 tracing::trace!("[APPSRC] need_data({})", len);
 
-                // if appsrc.caps().is_none() {
-                //     let caps = loop {
-                //         match buf.caps() {
-                //             Some(c) => break c.clone(),
-                //             None => {
-                //                 println!("no caps yet");
-                //                 std::thread::sleep_ms(1000);
-                //             }
-                //         }
-                //     };
-                //     println!("Setting caps: {:?}", caps);
-                //     appsrc.set_caps(Some(&caps));
-                // }
-
-                // let frame_size = loop {
-                //     if let Some(size) = buf.frame_size() {
-                //         break size.get();
-                //     }
-                // };
-                // println!("Frame size is {}", frame_size);
-
-                // let src = loop {
-                //     if !buf.can_read(frame_size) {
-                //         continue;
-                //     }
-
-                //     break buf.read(frame_size).unwrap();
-                // };
-                // println!("READ {}", src.len());
-
                 let sample = buf.read_buf();
-
-                // let mem = gstreamer::Memory::from_slice(src);
-
-                // let mut buffer = gstreamer::Buffer::new();
-                // let buffer_mut = buffer.make_mut();
-                // buffer_mut.append_memory(mem);
-
                 let _ = appsrc.push_sample(&sample);
             })
             .build(),
@@ -351,9 +366,9 @@ pub struct StreamPipeline {
 }
 
 impl StreamPipeline {
-    pub fn new(buf: Arc<VideoBuffer>) -> Self {
+    pub fn new(buf: Arc<VideoBuffer>, src: crate::Source) -> Self {
         Self {
-            pl: create_pipeline(buf),
+            pl: create_pipeline(buf, src),
         }
     }
 
@@ -413,11 +428,17 @@ async fn pipline_run_async(pipeline: &Pipeline) {
     pipeline.set_state(State::Null).unwrap();
 }
 
-trait Hls {}
+/// A raw HTTP response body stream.
+struct Http;
 
+struct Hls;
+
+/// A gstreamer element that produces `T`.
 pub trait Sink<T>: AsRef<Element> {}
 
+/// A gstreamer element that consumes `T`.
 pub trait Source<T>: AsRef<Element> {
+    /// Links the source element to a fitting sink `S`.
     fn link<S>(&self, sink: &S)
     where
         S: Sink<T>,
@@ -493,3 +514,46 @@ impl AudioMediaFormat for PcmAudio {}
 pub trait GstElement {
     const PACKAGE: &'static str;
 }
+
+#[derive(Debug)]
+pub enum Error {
+    MissingElement(&'static str),
+}
+
+fn create_element(name: &'static str) -> Result<Element, Error> {
+    ElementFactory::make(name, None).map_err(|_| Error::MissingElement(name))
+}
+
+pub struct AppSrc<T>
+where
+    T: MediaFormat,
+{
+    element: gstreamer_app::AppSrc,
+    _marker: PhantomData<T>,
+}
+
+impl<T> AppSrc<T>
+where
+    T: MediaFormat,
+{
+    pub fn new() -> Result<Self, Error> {
+        let element = create_element("appsrc")?;
+        let element = element.dynamic_cast().unwrap();
+
+        Ok(Self {
+            element,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T> AsRef<Element> for AppSrc<T>
+where
+    T: MediaFormat,
+{
+    fn as_ref(&self) -> &Element {
+        self.element.as_ref()
+    }
+}
+
+impl<T> Source<T> for AppSrc<T> where T: MediaFormat {}

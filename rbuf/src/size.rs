@@ -41,6 +41,17 @@ impl Size {
     }
 
     pub fn to_u32(&self) -> u32 {
+        #[cfg(debug_assertions)]
+        assert!(self.get() <= u32::MAX as usize);
+
+        if self.get() > u32::MAX as usize {
+            u32::MAX
+        } else {
+            self.to_u32_unchecked()
+        }
+    }
+
+    pub fn to_u32_unchecked(&self) -> u32 {
         self.get() as u32
     }
 }

@@ -19,18 +19,17 @@ where
         tracing::error!("Failed to write to sink");
     }
 
-    if stream.conn.client_sequence_number != seqnum {
-        // We lost a packet. Send a NAK.
-        tracing::trace!("Lost packet {}", stream.conn.client_sequence_number);
-        // TODO: NAK
-        let nak = Nak::builder()
-            .lost_packet_sequence_number(stream.conn.client_sequence_number)
-            .build();
+    // if stream.conn.client_sequence_number != seqnum {
+    //     // We lost a packet. Send a NAK.
+    //     tracing::trace!("Lost packet {}", stream.conn.client_sequence_number);
+    //     // TODO: NAK
+    //     let nak = Nak::builder()
+    //         .lost_packet_sequence_number(stream.conn.client_sequence_number)
+    //         .build();
 
-        let buf = nak.encode_to_vec()?;
-        stream.send(&buf).await?;
-        return Ok(());
-    }
+    //     stream.send(nak).await?;
+    //     return Ok(());
+    // }
 
     // Full ACK every 10ms.
     let should_send_ack = match stream.conn.inflight_acks.last() {
@@ -68,8 +67,7 @@ where
             .inflight_acks
             .push_back(server_sequence_number, now);
 
-        let buf = ack.encode_to_vec()?;
-        stream.send(&buf).await?;
+        stream.send(ack).await?;
     }
 
     stream.conn.client_sequence_number += 1;

@@ -21,21 +21,11 @@ where
 
     match time_sent {
         Some(ts) => {
-            let rtt = match ts
-                .elapsed()
-                .as_micros()
-                .checked_sub(packet.header.timestamp as u128)
-            {
-                Some(rtt) => rtt,
-                None => {
-                    tracing::debug!("Received ACKACK before ACK was sent, that's not right!");
-                    return Ok(());
-                }
-            };
+            let rtt = ts.elapsed().as_micros() as u32;
 
             tracing::debug!("Got ACKACK with RTT {}", rtt);
 
-            stream.conn.update_rtt(rtt as u32);
+            stream.conn.update_rtt(rtt);
 
             state.pool.insert(stream.conn);
         }

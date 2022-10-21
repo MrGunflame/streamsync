@@ -1,9 +1,9 @@
 pub mod builder;
 
 use std::convert::Infallible;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 
-use crate::proto::{Bits, Encode, U32};
+use crate::proto::{Bits, Decode, Encode, U32};
 
 use self::builder::{
     AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder, ShutdownBuilder,
@@ -56,6 +56,64 @@ impl Ack {
 
     pub fn set_acknowledgement_number(&mut self, n: u32) {
         self.header.seg1 = Bits(U32(n));
+    }
+
+    fn encode_body<W>(&self, mut writer: W) -> Result<(), Error>
+    where
+        W: Write,
+    {
+        self.last_acknowledged_packet_sequence_number
+            .encode(&mut writer)?;
+        self.rtt.encode(&mut writer)?;
+        self.rtt_variance.encode(&mut writer)?;
+        self.avaliable_buffer_size.encode(&mut writer)?;
+        self.packets_receiving_rate.encode(&mut writer)?;
+        self.estimated_link_capacity.encode(&mut writer)?;
+        self.receiving_rate.encode(&mut writer)?;
+
+        Ok(())
+    }
+
+    fn decode_body<R>(mut reader: R, header: Header) -> Result<Self, Error>
+    where
+        R: Read,
+    {
+        let last_acknowledged_packet_sequence_number = u32::decode(&mut reader)?;
+        let rtt = u32::decode(&mut reader)?;
+        let rtt_variance = u32::decode(&mut reader)?;
+        let avaliable_buffer_size = u32::decode(&mut reader)?;
+        let packets_receiving_rate = u32::decode(&mut reader)?;
+        let estimated_link_capacity = u32::decode(&mut reader)?;
+        let receiving_rate = u32::decode(&mut reader)?;
+
+        Ok(Self {
+            header,
+            last_acknowledged_packet_sequence_number,
+            rtt,
+            rtt_variance,
+            avaliable_buffer_size,
+            packets_receiving_rate,
+            estimated_link_capacity,
+            receiving_rate,
+        })
+    }
+}
+
+impl IsPacket for Ack {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        let mut body = Vec::new();
+        self.encode_body(&mut body).unwrap();
+
+        Packet {
+            header: self.header,
+            body,
+        }
+    }
+
+    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
+        Ok(Self::decode_body(&packet.body[..], packet.header)?)
     }
 }
 
@@ -165,7 +223,8 @@ impl IsPacket for AckAck {
 #[derive(Clone, Debug, Default)]
 pub struct Nak {
     pub header: Header,
-    pub lost_packet_sequence_number: Bits<U32>,
+    /// A single or a list of lost sequence numbers.
+    pub lost_packet_sequence_numbers: SequenceNumbers,
 }
 
 impl Nak {
@@ -173,13 +232,34 @@ impl Nak {
         NakBuilder::new()
     }
 
-    pub fn lost_packet_sequence_number(&self) -> u32 {
-        self.lost_packet_sequence_number.bits(1..32).0
+    pub fn lost_packet_sequence_number(&self) -> &SequenceNumbers {
+        &self.lost_packet_sequence_numbers
     }
 
     pub fn set_lost_packet_sequence_number(&mut self, n: u32) {
-        self.lost_packet_sequence_number.set_bits(0, 0);
-        self.lost_packet_sequence_number.set_bits(1..32, n);
+        self.lost_packet_sequence_numbers = SequenceNumbers::new_single(n);
+    }
+}
+
+impl IsPacket for Nak {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        let body = self.lost_packet_sequence_numbers.encode_to_vec().unwrap();
+
+        Packet {
+            header: self.header,
+            body,
+        }
+    }
+
+    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
+        let lost_packet_sequence_numbers = SequenceNumbers::decode(&packet.body[..])?;
+
+        Ok(Self {
+            header: packet.header,
+            lost_packet_sequence_numbers,
+        })
     }
 }
 
@@ -191,7 +271,7 @@ impl Encode for Nak {
         W: Write,
     {
         self.header.encode(&mut writer)?;
-        self.lost_packet_sequence_number.encode(&mut writer)?;
+        self.lost_packet_sequence_numbers.encode(&mut writer)?;
 
         Ok(())
     }
@@ -227,5 +307,124 @@ impl IsPacket for Shutdown {
         Ok(Self {
             header: packet.header,
         })
+    }
+}
+
+/// A list of one or more encoded sequence numbers.
+///
+/// See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#appendix-A
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SequenceNumbers {
+    Single(Bits<U32>),
+    Multiple(Vec<Bits<U32>>),
+}
+
+impl SequenceNumbers {
+    pub fn new_single<T>(seq: T) -> Self
+    where
+        T: Into<U32>,
+    {
+        let mut bits = Bits(seq.into());
+        bits.set_bits(0, 0);
+
+        Self::Single(bits)
+    }
+
+    pub fn new_multiple<T, I>(iter: I) -> Self
+    where
+        T: Into<U32>,
+        I: Iterator<Item = T>,
+    {
+        let mut buf: Vec<Bits<U32>> = iter.map(|item| Bits(item.into())).collect();
+
+        for bits in buf.iter_mut() {
+            bits.set_bits(0, 1);
+        }
+
+        if let Some(bits) = buf.last_mut() {
+            bits.set_bits(0, 0);
+        }
+
+        Self::Multiple(buf)
+    }
+
+    pub fn set_single<T>(&mut self, seq: T)
+    where
+        T: Into<U32>,
+    {
+        let mut bits = Bits(seq.into());
+        bits.set_bits(0, 0);
+
+        *self = Self::Single(bits);
+    }
+
+    fn is_final(bits: Bits<U32>) -> bool {
+        bits.bits(0) == 0
+    }
+}
+
+impl Encode for SequenceNumbers {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        match self {
+            Self::Single(buf) => buf.encode(writer)?,
+            Self::Multiple(buf) => {
+                for b in buf {
+                    b.encode(&mut writer)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl Decode for SequenceNumbers {
+    type Error = Error;
+
+    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let seq = Bits::decode(&mut reader)?;
+
+        if Self::is_final(seq) {
+            return Ok(Self::Single(seq));
+        }
+
+        let mut buf = vec![seq];
+        loop {
+            let seq = Bits::decode(&mut reader)?;
+            buf.push(seq);
+
+            if Self::is_final(seq) {
+                return Ok(Self::Multiple(buf));
+            }
+        }
+    }
+}
+
+impl<A> FromIterator<A> for SequenceNumbers
+where
+    A: Into<U32>,
+{
+    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
+        let mut vec: Vec<U32> = iter.into_iter().map(|item| item.into()).collect();
+
+        if vec.len() == 1 {
+            Self::new_single(vec[0])
+        } else {
+            Self::new_multiple(vec.into_iter())
+        }
+    }
+}
+
+impl Default for SequenceNumbers {
+    fn default() -> Self {
+        Self::Single(Bits(U32(0)))
     }
 }

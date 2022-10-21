@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::num::Wrapping;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,7 @@ use crate::sink::{MultiSink, SessionId};
 
 use super::conn::AckQueue;
 use super::sink::OutputSink;
-use super::HandshakeType;
+use super::{HandshakeType, Header};
 
 #[derive(Clone)]
 pub struct State<S>
@@ -82,6 +83,11 @@ where
     {
         self.inner.lock().unwrap().get(conn.borrow()).cloned()
     }
+
+    pub fn clean(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.retain(|conn| conn.last_packet_time.elapsed() <= Duration::from_secs(5));
+    }
 }
 
 /// All SRT traffic flows over a single UDP socket. A [`Connection`] represents a single stream
@@ -109,7 +115,14 @@ where
 
     pub inflight_acks: AckQueue,
 
+    /// Total packets/bytes received from the peer.
+    pub packets_recv: Wrapping<u32>,
+    pub bytes_recv: Wrapping<u32>,
+
     pub sink: Arc<Mutex<Option<OutputSink<S>>>>,
+    /// Relative timestamp of the last transmitted message. We drop the connection when this
+    /// reaches 5s.
+    pub last_packet_time: Instant,
 }
 
 impl<S> Connection<S>
@@ -135,6 +148,9 @@ where
             syn_cookie: 0,
             inflight_acks: AckQueue::new(),
             sink: Arc::default(),
+            last_packet_time: Instant::now(),
+            packets_recv: Wrapping(0),
+            bytes_recv: Wrapping(0),
         }
     }
 
@@ -146,8 +162,9 @@ where
         // See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.10
         // Update RTT variance before RTT because the current RTT is required
         // to calculate the RTT variance.
-        self.rtt_variance = (3 / 4) * self.rtt_variance + (1 / 4) * self.rtt.abs_diff(rtt);
-        self.rtt = (7 / 8) * self.rtt + (1 / 8) * rtt;
+        self.rtt_variance = ((3.0 / 4.0) * self.rtt_variance as f32
+            + (1.0 / 4.0) * self.rtt.abs_diff(rtt) as f32) as u32;
+        self.rtt = ((7.0 / 8.0) * self.rtt as f32 + (1.0 / 8.0) * rtt as f32) as u32;
     }
 
     pub async fn write_sink<M>(
@@ -190,6 +207,9 @@ where
             syn_cookie: self.syn_cookie,
             inflight_acks: self.inflight_acks.clone(),
             sink: self.sink.clone(),
+            last_packet_time: self.last_packet_time.clone(),
+            bytes_recv: self.bytes_recv,
+            packets_recv: self.packets_recv,
         }
     }
 }

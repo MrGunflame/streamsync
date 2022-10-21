@@ -10,7 +10,7 @@ use futures::Sink;
 pub struct SessionId(pub u64);
 
 pub trait MultiSink: Clone + Send + Sync {
-    type Sink: futures::Sink<Vec<u8>> + Unpin;
+    type Sink: futures::Sink<Vec<u8>> + Send + Sync + Unpin;
 
     fn attach(&self, id: SessionId) -> Self::Sink;
 

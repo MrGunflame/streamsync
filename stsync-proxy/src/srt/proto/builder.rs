@@ -175,7 +175,7 @@ impl NakBuilder {
         self
     }
 
-    pub const fn build(self) -> Nak {
+    pub fn build(self) -> Nak {
         self.0
     }
 }

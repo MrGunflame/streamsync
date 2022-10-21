@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::{Sink, Stream, StreamExt};
 use tokio::net::{ToSocketAddrs, UdpSocket};
@@ -18,29 +18,29 @@ use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::{AckPacket, ControlPacketType, PacketType};
 
-use super::{Error, Packet};
+use super::{Error, IsPacket, Packet};
 
 pub async fn serve<A, S>(addr: A, sink: S) -> Result<(), io::Error>
 where
     A: ToSocketAddrs,
-    S: MultiSink,
+    S: MultiSink + 'static,
 {
     let socket = UdpSocket::bind(addr).await?;
     tracing::info!("Listing on {}", socket.local_addr()?);
 
     let state = State::new(sink);
 
-    let mut file = std::fs::File::create("out.ts").unwrap();
-
-    let socket = Arc::new(socket);
-
-    let buffer = Buffer::default();
-    let mut buffer2 = buffer.clone();
+    // Clean regularly
+    let state2 = state.clone();
     tokio::task::spawn(async move {
-        while let Some(buf) = buffer2.next().await {
-            file.write_all(&buf).unwrap();
+        loop {
+            tokio::time::sleep(Duration::new(5, 0)).await;
+            tracing::trace!("Tick cleanup");
+            state2.pool.clean();
         }
     });
+
+    let socket = Arc::new(socket);
 
     loop {
         let mut buf = [0; 1500];
@@ -119,13 +119,18 @@ where
         addr,
     };
 
-    tracing::debug!("{}", packet.header.destination_socket_id);
-
     let stream = match state
         .pool
         .get(SocketId(packet.header.destination_socket_id))
     {
-        Some(conn) => SrtConnStream { stream, conn },
+        Some(mut conn) => {
+            conn.last_packet_time = Instant::now();
+            conn.packets_recv += 1;
+            conn.bytes_recv += packet.size() as u32;
+            state.pool.insert(conn.clone());
+
+            SrtConnStream { stream, conn }
+        }
         // New Packet from unknown client.
         None => {
             match packet.downcast() {
@@ -185,8 +190,13 @@ pub struct SrtStream<'a> {
 }
 
 impl<'a> SrtStream<'a> {
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.socket.send_to(buf, self.addr).await
+    pub async fn send<T>(&self, packet: T) -> Result<(), Error>
+    where
+        T: IsPacket,
+    {
+        let buf = packet.upcast().encode_to_vec()?;
+        self.socket.send_to(&buf, self.addr).await?;
+        Ok(())
     }
 }
 
@@ -203,109 +213,15 @@ impl<'a, M> SrtConnStream<'a, M>
 where
     M: MultiSink,
 {
-    pub async fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        self.stream.send(buf).await
-    }
-}
+    pub async fn send<T>(&self, packet: T) -> Result<(), Error>
+    where
+        T: IsPacket,
+    {
+        let mut packet = packet.upcast();
+        packet.header.timestamp = self.conn.timestamp();
+        packet.header.destination_socket_id = self.conn.client_socket_id.0;
 
-/// An ordered buffer.
-#[derive(Clone, Debug, Default)]
-pub struct Buffer {
-    /// The seqnum that the buffer head is currently waiting for.
-    next_seqnum: Arc<Mutex<u32>>,
-    /// Ready buffer. This buffer is ordered and ready to be consumed.
-    buf: Arc<Mutex<Vec<u8>>>,
-    /// Internal queue. This buffers all segments that require a previous segment.
-    queue: Arc<Mutex<HashMap<u32, Vec<u8>>>>,
-    waker: Arc<Mutex<Option<Waker>>>,
-    is_closed: Arc<AtomicBool>,
-}
-
-impl Buffer {
-    pub fn push(&self, seqnum: u32, buf: Vec<u8>) {
-        tracing::trace!("Buffer::push({}, buf)", seqnum);
-
-        // Correct segment.
-        let mut next_seqnum = self.next_seqnum.lock().unwrap();
-        if *next_seqnum == seqnum {
-            tracing::debug!("{} is in order", seqnum);
-
-            let mut out = self.buf.lock().unwrap();
-            out.extend(buf);
-
-            *next_seqnum += 1;
-
-            // Push all segments that are waiting on seqnum.
-            loop {
-                let mut queue = self.queue.lock().unwrap();
-                match queue.remove(&next_seqnum) {
-                    Some(buf) => {
-                        out.extend(buf);
-                        *next_seqnum += 1;
-                    }
-                    None => break,
-                }
-            }
-
-            // Wake the a stream waker if avaliable.
-            self.wake_rx();
-
-            return;
-        }
-
-        tracing::debug!("{} is out of order (missing {})", seqnum, next_seqnum);
-        // Missing a segment
-        let mut queue = self.queue.lock().unwrap();
-        queue.insert(seqnum, buf);
-    }
-
-    pub fn set_seqnum(&self, seqnum: u32) {
-        *self.next_seqnum.lock().unwrap() = seqnum;
-    }
-
-    pub fn close(&self) {
-        self.is_closed.store(true, Ordering::Release);
-
-        self.wake_rx();
-    }
-
-    fn wake_rx(&self) {
-        let waker = self.waker.lock().unwrap();
-        if let Some(waker) = waker.as_ref() {
-            waker.wake_by_ref();
-        }
-    }
-}
-
-impl Stream for Buffer {
-    type Item = Vec<u8>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut buf = self.buf.lock().unwrap();
-        if buf.len() > 0 {
-            // Swap out the current buffer with a empty one. Return the swapped, filled buffer.
-            let out = std::mem::replace(&mut *buf, Vec::new());
-
-            return Poll::Ready(Some(out));
-        }
-
-        // Check if the sink is closed.
-        if self.is_closed.load(Ordering::Acquire) {
-            return Poll::Ready(None);
-        }
-
-        let mut waker = self.waker.lock().unwrap();
-
-        let update_waker = match &*waker {
-            Some(waker) => !waker.will_wake(cx.waker()),
-            None => true,
-        };
-
-        if update_waker {
-            *waker = Some(cx.waker().clone());
-        }
-
-        Poll::Pending
+        self.stream.send(packet).await
     }
 }
 

@@ -11,10 +11,7 @@ where
     /// Sequence number of the next expected segment.
     next_seqnum: u32,
     sink: S,
-    queue: HashMap<u32, Vec<u8>>,
-
-    is_ordered: bool,
-    is_closed: bool,
+    queue: BufferQueue,
 }
 
 impl<S> OutputSink<S>
@@ -25,9 +22,7 @@ where
         Self {
             next_seqnum: seqnum,
             sink,
-            queue: HashMap::new(),
-            is_ordered: true,
-            is_closed: false,
+            queue: BufferQueue::new(),
         }
     }
 
@@ -44,7 +39,7 @@ where
             self.next_seqnum += 1;
 
             loop {
-                match self.queue.remove(&self.next_seqnum) {
+                match self.queue.remove(self.next_seqnum) {
                     Some(buf) => {
                         self.sink.feed(buf).await?;
                         self.next_seqnum += 1;
@@ -66,6 +61,45 @@ where
     }
 
     pub async fn close(&mut self) -> Result<(), S::Error> {
+        tracing::debug!("Dropping {} bytes from queue", self.queue.size);
+        self.queue.clear();
+
         self.sink.close().await
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BufferQueue {
+    inner: HashMap<u32, Vec<u8>>,
+    /// Total size of all buffers combined.
+    size: usize,
+}
+
+impl BufferQueue {
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+            size: 0,
+        }
+    }
+
+    pub fn insert(&mut self, seq: u32, buf: Vec<u8>) {
+        self.size += buf.len();
+        self.inner.insert(seq, buf);
+    }
+
+    pub fn remove(&mut self, seq: u32) -> Option<Vec<u8>> {
+        match self.inner.remove(&seq) {
+            Some(buf) => {
+                self.size -= buf.len();
+                Some(buf)
+            }
+            None => None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.inner.clear();
+        self.size = 0;
     }
 }

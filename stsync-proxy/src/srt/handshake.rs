@@ -66,8 +66,7 @@ where
     // TODO: Correct IP handling
     resp.peer_ip_address = u32::from_be_bytes([127, 0, 0, 1]) as u128;
 
-    let buf = resp.encode_to_vec()?;
-    stream.send(&buf).await?;
+    stream.send(resp).await?;
 
     // Mark the connection as alive.
     let mut conn = Connection::new(server_socket_id, client_socket_id);
@@ -103,7 +102,7 @@ where
     packet.syn_cookie = 0;
 
     let buf = packet.encode_to_vec()?;
-    stream.send(&buf).await?;
+    stream.send(packet).await?;
 
     // Update the conn
     stream.conn.state = HandshakeType::Done;

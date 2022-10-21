@@ -62,7 +62,7 @@ impl_uint_be! {
     u128,
 }
 
-impl Encode for Vec<u8> {
+impl Encode for [u8] {
     type Error = io::Error;
 
     fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>

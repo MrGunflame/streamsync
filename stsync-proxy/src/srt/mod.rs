@@ -11,7 +11,10 @@ mod shutdown;
 mod sink;
 pub mod state;
 
-use std::io::{self, Read, Write};
+use std::{
+    convert::Infallible,
+    io::{self, Read, Write},
+};
 
 use crate::proto::{Bits, Decode, Encode, U32};
 
@@ -44,6 +47,8 @@ pub struct Header {
 }
 
 impl Header {
+    pub const SIZE: usize = 128;
+
     pub fn packet_type(&self) -> PacketType {
         // First BE bit.
         match self.seg0.bits(0).0 {
@@ -622,7 +627,26 @@ pub struct Packet {
     body: Vec<u8>,
 }
 
+impl IsPacket for Packet {
+    type Error = Infallible;
+
+    #[inline]
+    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
+        Ok(packet)
+    }
+
+    #[inline]
+    fn upcast(self) -> Packet {
+        self
+    }
+}
+
 impl Packet {
+    /// Returns the total size (incl. header) of the packet.
+    pub fn size(&self) -> usize {
+        Header::SIZE + self.body.len()
+    }
+
     pub fn downcast<T>(self) -> Result<T, Error>
     where
         T: IsPacket<Error = Error>,

@@ -3,10 +3,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use super::server::{SrtConnStream, SrtStream};
 use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
-use crate::proto::Encode;
 use crate::sink::MultiSink;
+use crate::srt::state::{ConnectionId, ConnectionState, SocketId};
 
-static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(0);
+const SRT_MAGIC: u16 = 0xA17;
+
+static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
 macro_rules! srt_assert {
@@ -30,6 +32,12 @@ where
     S: MultiSink,
 {
     tracing::trace!("INDUCTION");
+
+    // Remove the client if it already exists.
+    state.pool.remove(ConnectionId {
+        addr: stream.addr,
+        socket_id: packet.srt_socket_id.into(),
+    });
 
     // Check if the handshake induction is valid.
     srt_assert!(packet.version, 4);
@@ -66,48 +74,138 @@ where
     // TODO: Correct IP handling
     resp.peer_ip_address = u32::from_be_bytes([127, 0, 0, 1]) as u128;
 
-    stream.send(resp).await?;
-
     // Mark the connection as alive.
-    let mut conn = Connection::new(server_socket_id, client_socket_id);
-    conn.client_sequence_number = client_seqnum;
-    conn.server_sequence_number = server_seqnum;
-    conn.syn_cookie = syn_cookie;
+    let mut conn = Connection::new(stream.addr, server_socket_id, client_socket_id);
+    conn.client_sequence_number = AtomicU32::new(client_seqnum);
+    conn.server_sequence_number = AtomicU32::new(server_seqnum);
+    conn.syn_cookie = AtomicU32::new(syn_cookie);
+    conn.state.set(ConnectionState::INDUCTION);
+
+    tracing::debug!(
+        "Adding new client with state {:?} SYN {:?}",
+        conn.state,
+        conn.syn_cookie
+    );
     state.pool.insert(conn);
+
+    stream.send(resp).await?;
 
     tracing::debug!("Adding new client with state INDUCTION");
     Ok(())
 }
 
 pub async fn handshake<S>(
-    mut packet: HandshakePacket,
-    mut stream: SrtConnStream<'_, S>,
+    packet: HandshakePacket,
+    stream: SrtStream<'_>,
     state: State<S>,
 ) -> Result<(), Error>
 where
     S: MultiSink,
 {
-    // A client may not know that we know them.
-    if packet.handshake_type != HandshakeType::Conclusion {
-        return handshake_new(packet, stream.stream, state).await;
+    match packet.handshake_type {
+        HandshakeType::Induction => handshake_induction(packet, stream, state).await,
+        HandshakeType::Conclusion => handshake_conclusion(packet, stream, state).await,
+        t => {
+            tracing::debug!("Unsupported handshake type {:?}", t);
+            Ok(())
+        }
     }
+}
 
-    srt_assert!(packet.handshake_type, HandshakeType::Conclusion);
+async fn handshake_induction<M>(
+    packet: HandshakePacket,
+    stream: SrtStream<'_>,
+    state: State<M>,
+) -> Result<(), Error>
+where
+    M: MultiSink,
+{
+    tracing::trace!("INDUCTION");
+    debug_assert_eq!(packet.handshake_type, HandshakeType::Induction);
+
+    srt_assert!(packet.version, 4);
+    srt_assert!(packet.encryption_field, 0);
+    srt_assert!(packet.extension_field, 2);
+    srt_assert!(packet.syn_cookie, 0);
+
+    let client_socket_id = packet.srt_socket_id;
+    let server_socket_id = SRV_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+
+    let client_seqnum = packet.initial_packet_sequence_number;
+    let server_seqnum = state.random();
+
+    let syn_cookie = state.random();
+
+    let mut resp = HandshakePacket::default();
+    resp.header.set_packet_type(PacketType::Control);
+    resp.header.timestamp = 0;
+    resp.header.destination_socket_id = client_socket_id;
+
+    resp.handshake_type = HandshakeType::Induction;
+    resp.version = 5;
+    resp.extension_field = SRT_MAGIC;
+    resp.syn_cookie = syn_cookie;
+    resp.srt_socket_id = server_socket_id;
+    resp.initial_packet_sequence_number = server_seqnum;
+
+    resp.maximum_transmission_unit_size = state.config.mtu;
+    resp.maximum_flow_window_size = state.config.flow_window;
+
+    stream.send(resp).await?;
+
+    let mut conn = Connection::new(stream.addr, server_socket_id, client_socket_id);
+    conn.client_sequence_number = AtomicU32::new(client_seqnum);
+    conn.server_sequence_number = AtomicU32::new(server_seqnum);
+    conn.syn_cookie = AtomicU32::new(syn_cookie);
+    conn.state.set(ConnectionState::INDUCTION);
+
+    tracing::debug!("Adding new client");
+    state.pool.insert(conn);
+
+    Ok(())
+}
+
+async fn handshake_conclusion<M>(
+    mut packet: HandshakePacket,
+    stream: SrtStream<'_>,
+    state: State<M>,
+) -> Result<(), Error>
+where
+    M: MultiSink,
+{
+    tracing::trace!("CONCLUSION");
+    debug_assert_eq!(packet.handshake_type, HandshakeType::Conclusion);
+
     srt_assert!(packet.version, 5);
     srt_assert!(packet.encryption_field, 0);
-    srt_assert!(packet.syn_cookie, stream.conn.syn_cookie);
 
-    // Remove the syn_cookie.
-    packet.srt_socket_id = stream.conn.server_socket_id.0;
+    let conn = match state.pool.find_client_id(stream.addr, packet.srt_socket_id) {
+        Some(conn) => conn,
+        None => {
+            tracing::debug!(
+                "Unknown socket id {} from peer {}",
+                packet.srt_socket_id,
+                stream.addr
+            );
+
+            return Ok(());
+        }
+    };
+
+    srt_assert!(packet.syn_cookie, conn.syn_cookie.load(Ordering::Relaxed));
+
+    packet.header.timestamp = conn.timestamp();
+    packet.header.destination_socket_id = packet.srt_socket_id;
+
     packet.syn_cookie = 0;
+    packet.srt_socket_id = conn.server_socket_id.0;
+    packet.initial_packet_sequence_number = conn.server_sequence_number.load(Ordering::Relaxed);
 
-    let buf = packet.encode_to_vec()?;
     stream.send(packet).await?;
 
-    // Update the conn
-    stream.conn.state = HandshakeType::Done;
+    tracing::debug!("Connection from {} INDUCTION -> DONE", stream.addr);
+    conn.state.set(ConnectionState::DONE);
 
-    state.pool.insert(stream.conn);
     Ok(())
 }
 

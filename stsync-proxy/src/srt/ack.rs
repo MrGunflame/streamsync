@@ -4,7 +4,7 @@ use super::{proto::AckAck, server::SrtConnStream, state::State, Error};
 
 pub async fn ackack<S>(
     packet: AckAck,
-    mut stream: SrtConnStream<'_, S>,
+    stream: SrtConnStream<'_, S>,
     state: State<S>,
 ) -> Result<(), Error>
 where
@@ -13,11 +13,13 @@ where
     // Calculate the RTT since the last ACK. We need to be careful not to underflow if the client
     // sends a bad timestamp.
     let mut time_sent = None;
-    while let Some((seq, ts)) = stream.conn.inflight_acks.pop_front() {
+    let mut inflight_acks = stream.conn.inflight_acks.lock().unwrap();
+    while let Some((seq, ts)) = inflight_acks.pop_front() {
         if packet.acknowledgement_number() == seq {
             time_sent = Some(ts);
         }
     }
+    drop(inflight_acks);
 
     match time_sent {
         Some(ts) => {
@@ -25,9 +27,7 @@ where
 
             tracing::debug!("Got ACKACK with RTT {}", rtt);
 
-            stream.conn.update_rtt(rtt);
-
-            state.pool.insert(stream.conn);
+            stream.conn.rtt.update(rtt);
         }
         None => (),
     }

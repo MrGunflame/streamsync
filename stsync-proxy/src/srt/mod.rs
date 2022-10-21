@@ -2,6 +2,7 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01
 mod ack;
+pub mod config;
 mod conn;
 mod data;
 mod handshake;

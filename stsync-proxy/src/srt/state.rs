@@ -1,7 +1,9 @@
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::net::SocketAddr;
 use std::num::Wrapping;
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,6 +15,7 @@ use tokio::sync::mpsc;
 
 use crate::sink::{MultiSink, SessionId};
 
+use super::config::Config;
 use super::conn::AckQueue;
 use super::sink::OutputSink;
 use super::{HandshakeType, Header};
@@ -22,6 +25,7 @@ pub struct State<S>
 where
     S: MultiSink,
 {
+    pub config: Arc<Config>,
     pub pool: Arc<ConnectionPool<S>>,
     /// Pseudo RNG for all non-crypto randomness
     // NOTE: This actually is a CSPRNG but it doesn't have to be.
@@ -33,8 +37,9 @@ impl<S> State<S>
 where
     S: MultiSink,
 {
-    pub fn new(sink: S) -> Self {
+    pub fn new(sink: S, config: Config) -> Self {
         Self {
+            config: Arc::new(config),
             pool: Arc::new(ConnectionPool::new()),
             prng: Arc::default(),
             sink,
@@ -51,7 +56,7 @@ pub struct ConnectionPool<M>
 where
     M: MultiSink,
 {
-    inner: Mutex<HashSet<Connection<M::Sink>>>,
+    inner: Mutex<HashSet<Arc<Connection<M::Sink>>>>,
 }
 
 impl<M> ConnectionPool<M>
@@ -66,27 +71,57 @@ where
 
     pub fn insert(&self, conn: Connection<M::Sink>) {
         let mut inner = self.inner.lock().unwrap();
-        inner.remove(&conn.server_socket_id);
-        inner.insert(conn);
+        inner.insert(Arc::new(conn));
     }
 
     pub fn remove<T>(&self, conn: T)
     where
-        T: Borrow<SocketId>,
+        T: Borrow<ConnectionId>,
     {
-        self.inner.lock().unwrap().remove(conn.borrow());
+        let mut inner = self.inner.lock().unwrap();
+        inner.remove(conn.borrow());
     }
 
-    pub fn get<T>(&self, conn: T) -> Option<Connection<M::Sink>>
+    pub fn get<T>(&self, conn: T) -> Option<Arc<Connection<M::Sink>>>
     where
-        T: Borrow<SocketId>,
+        T: Borrow<ConnectionId>,
     {
         self.inner.lock().unwrap().get(conn.borrow()).cloned()
     }
 
-    pub fn clean(&self) {
+    pub fn clean(&self) -> usize {
         let mut inner = self.inner.lock().unwrap();
-        inner.retain(|conn| conn.last_packet_time.elapsed() <= Duration::from_secs(5));
+        let mut num_removed = 0;
+        inner.retain(|conn| {
+            if conn.last_packet_time.lock().unwrap().elapsed() > Duration::from_secs(15) {
+                num_removed += 1;
+                false
+            } else {
+                true
+            }
+        });
+
+        num_removed
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+
+    pub fn find_client_id(
+        &self,
+        addr: SocketAddr,
+        socket_id: u32,
+    ) -> Option<Arc<Connection<M::Sink>>> {
+        let inner = self.inner.lock().unwrap();
+
+        for conn in &*inner {
+            if conn.id.addr == addr && conn.client_socket_id == socket_id {
+                return Some(conn.clone());
+            }
+        }
+
+        None
     }
 }
 
@@ -101,56 +136,63 @@ pub struct Connection<S>
 where
     S: Sink<Vec<u8>>,
 {
+    pub id: ConnectionId,
+
     /// Starting time of the connection. Used to calculate packet timestamps.
     pub start_time: Instant,
     pub server_socket_id: SocketId,
     /// Socket id of the the remote peer.
     pub client_socket_id: SocketId,
-    pub client_sequence_number: u32,
-    pub server_sequence_number: u32,
-    pub rtt: u32,
-    pub rtt_variance: u32,
-    pub state: HandshakeType,
-    pub syn_cookie: u32,
+    pub client_sequence_number: AtomicU32,
+    pub server_sequence_number: AtomicU32,
 
-    pub inflight_acks: AckQueue,
+    pub rtt: Rtt,
+    pub state: ConnectionState,
+    // TODO: Merge with state.
+    pub syn_cookie: AtomicU32,
+
+    pub inflight_acks: Mutex<AckQueue>,
 
     /// Total packets/bytes received from the peer.
-    pub packets_recv: Wrapping<u32>,
-    pub bytes_recv: Wrapping<u32>,
+    // TODO: Merge together into single cell
+    pub packets_recv: AtomicU32,
+    pub bytes_recv: AtomicU32,
 
-    pub sink: Arc<Mutex<Option<OutputSink<S>>>>,
+    pub sink: Mutex<Option<OutputSink<S>>>,
     /// Relative timestamp of the last transmitted message. We drop the connection when this
     /// reaches 5s.
-    pub last_packet_time: Instant,
+    pub last_packet_time: Mutex<Instant>,
 }
 
 impl<S> Connection<S>
 where
     S: Sink<Vec<u8>>,
 {
-    pub fn new<T, U>(server_socket_id: T, client_socket_id: U) -> Self
+    pub fn new<T, U>(addr: SocketAddr, server_socket_id: T, client_socket_id: U) -> Self
     where
         T: Into<SocketId>,
         U: Into<SocketId>,
     {
+        let server_socket_id = server_socket_id.into();
+
         Self {
+            id: ConnectionId {
+                addr,
+                socket_id: server_socket_id,
+            },
             start_time: Instant::now(),
             server_socket_id: server_socket_id.into(),
             client_socket_id: client_socket_id.into(),
-            client_sequence_number: 0,
-            server_sequence_number: 0,
-            // Default 100ms
-            rtt: 100_000,
-            // Default 50ms
-            rtt_variance: 50_000,
-            state: HandshakeType::Induction,
-            syn_cookie: 0,
-            inflight_acks: AckQueue::new(),
-            sink: Arc::default(),
-            last_packet_time: Instant::now(),
-            packets_recv: Wrapping(0),
-            bytes_recv: Wrapping(0),
+            client_sequence_number: AtomicU32::new(0),
+            server_sequence_number: AtomicU32::new(0),
+            rtt: Rtt::new(),
+            state: ConnectionState::new(),
+            syn_cookie: AtomicU32::new(0),
+            inflight_acks: Mutex::new(AckQueue::new()),
+            sink: Mutex::default(),
+            last_packet_time: Mutex::new(Instant::now()),
+            packets_recv: AtomicU32::new(0),
+            bytes_recv: AtomicU32::new(0),
         }
     }
 
@@ -158,13 +200,12 @@ where
         Instant::now().duration_since(self.start_time).as_micros() as u32
     }
 
-    pub fn update_rtt(&mut self, rtt: u32) {
-        // See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.10
-        // Update RTT variance before RTT because the current RTT is required
-        // to calculate the RTT variance.
-        self.rtt_variance = ((3.0 / 4.0) * self.rtt_variance as f32
-            + (1.0 / 4.0) * self.rtt.abs_diff(rtt) as f32) as u32;
-        self.rtt = ((7.0 / 8.0) * self.rtt as f32 + (1.0 / 8.0) * rtt as f32) as u32;
+    pub fn delivery_time<T>(&self, header: T) -> Instant
+    where
+        T: AsRef<Header>,
+    {
+        let time = Duration::from_micros((header.as_ref().timestamp + self.rtt.load().0) as u64);
+        self.start_time + time
     }
 
     pub async fn write_sink<M>(
@@ -190,36 +231,30 @@ where
     }
 }
 
-impl<S> Clone for Connection<S>
+impl<'a, S> Borrow<ConnectionId> for Arc<Connection<S>>
 where
     S: Sink<Vec<u8>>,
 {
-    fn clone(&self) -> Self {
-        Self {
-            start_time: self.start_time,
-            server_socket_id: self.server_socket_id,
-            client_socket_id: self.client_socket_id,
-            server_sequence_number: self.server_sequence_number,
-            client_sequence_number: self.client_sequence_number,
-            rtt: self.rtt,
-            rtt_variance: self.rtt_variance,
-            state: self.state,
-            syn_cookie: self.syn_cookie,
-            inflight_acks: self.inflight_acks.clone(),
-            sink: self.sink.clone(),
-            last_packet_time: self.last_packet_time.clone(),
-            bytes_recv: self.bytes_recv,
-            packets_recv: self.packets_recv,
-        }
+    fn borrow(&self) -> &ConnectionId {
+        &self.id
     }
 }
 
-impl<S> Borrow<SocketId> for Connection<S>
+impl<S> Borrow<ConnectionId> for Connection<S>
 where
     S: Sink<Vec<u8>>,
 {
-    fn borrow(&self) -> &SocketId {
-        &self.server_socket_id
+    fn borrow(&self) -> &ConnectionId {
+        &self.id
+    }
+}
+
+impl<S> PartialEq<ConnectionId> for Connection<S>
+where
+    S: Sink<Vec<u8>>,
+{
+    fn eq(&self, other: &ConnectionId) -> bool {
+        self.id == *other
     }
 }
 
@@ -228,7 +263,7 @@ where
     S: Sink<Vec<u8>>,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.server_socket_id == other.server_socket_id
+        self.id == other.id
     }
 }
 
@@ -237,7 +272,7 @@ where
     S: Sink<Vec<u8>>,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.server_socket_id.hash(state);
+        self.id.hash(state);
     }
 }
 
@@ -255,5 +290,101 @@ impl PartialEq<u32> for SocketId {
 impl From<u32> for SocketId {
     fn from(src: u32) -> Self {
         Self(src)
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectionState {
+    inner: AtomicU8,
+}
+
+impl ConnectionState {
+    pub const NULL: u8 = 0;
+    pub const INDUCTION: u8 = 1;
+    pub const DONE: u8 = 2;
+
+    pub fn new() -> Self {
+        Self {
+            inner: AtomicU8::new(Self::NULL),
+        }
+    }
+
+    pub fn set(&self, state: u8) {
+        self.inner.store(state, Ordering::Release);
+    }
+}
+
+/// A single atomic cell containing both RTT and RTT variance.
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Rtt {
+    // 1. 32-bit RTT
+    // 2. 32-bit RTT variance
+    cell: AtomicU64,
+}
+
+impl Rtt {
+    /// Default RTT of 100ms and RTT variance of 50ms.
+    pub fn new() -> Self {
+        let bits = Self::to_bits(100_000, 50_000);
+
+        Self {
+            cell: AtomicU64::new(bits),
+        }
+    }
+
+    pub fn load(&self) -> (u32, u32) {
+        let bits = self.cell.load(Ordering::Relaxed);
+        Self::from_bits(bits)
+    }
+
+    pub fn update(&self, new: u32) {
+        // See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.10
+        let _ = self
+            .cell
+            .fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
+                let (mut rtt, mut var) = Self::from_bits(bits);
+
+                var = ((3.0 / 4.0) * var as f32 + (1.0 / 4.0) * var.abs_diff(new) as f32) as u32;
+                rtt = ((7.0 / 8.0) * rtt as f32 + (1.0 / 8.0) * rtt as f32) as u32;
+
+                Some(Self::to_bits(rtt, var))
+            });
+    }
+
+    const fn from_bits(bits: u64) -> (u32, u32) {
+        let rtt = (bits & ((1 << 31) - 1)) as u32;
+        let var = (bits >> 32) as u32;
+        (rtt, var)
+    }
+
+    const fn to_bits(rtt: u32, var: u32) -> u64 {
+        rtt as u64 + (var as u64) << 32
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ConnectionId {
+    pub addr: SocketAddr,
+    pub socket_id: SocketId,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, net::SocketAddr};
+
+    use crate::{
+        sink::NullSink,
+        srt::state::{Connection, ConnectionId, SocketId},
+    };
+
+    #[test]
+    fn test_set() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 80));
+        let socket_id = SocketId(50);
+        let mut set = HashSet::<Connection<NullSink>>::new();
+        set.insert(Connection::new(addr, socket_id, 0));
+
+        assert!(set.get(&ConnectionId { addr, socket_id }).is_some());
     }
 }

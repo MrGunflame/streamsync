@@ -62,3 +62,26 @@ impl Sink<Vec<u8>> for FileSink {
         Poll::Ready(Ok(()))
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct NullSink;
+
+impl Sink<Vec<u8>> for NullSink {
+    type Error = Infallible;
+
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, _: Vec<u8>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+}

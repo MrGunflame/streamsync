@@ -12,15 +12,17 @@ use std::time::{Duration, Instant};
 use futures::{Sink, Stream, StreamExt};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
+use super::config::Config;
 use super::state::{Connection, SocketId, State};
 use crate::proto::{Bits, Decode, Encode};
 use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
+use crate::srt::state::ConnectionId;
 use crate::srt::{AckPacket, ControlPacketType, PacketType};
 
 use super::{Error, IsPacket, Packet};
 
-pub async fn serve<A, S>(addr: A, sink: S) -> Result<(), io::Error>
+pub async fn serve<A, S>(addr: A, sink: S, config: Config) -> Result<(), io::Error>
 where
     A: ToSocketAddrs,
     S: MultiSink + 'static,
@@ -28,15 +30,25 @@ where
     let socket = UdpSocket::bind(addr).await?;
     tracing::info!("Listing on {}", socket.local_addr()?);
 
-    let state = State::new(sink);
+    let state = State::new(sink, config);
+    state.pool.insert(Connection::new(
+        SocketAddr::from(([127, 0, 0, 1], 69)),
+        0,
+        0,
+    ));
 
     // Clean regularly
     let state2 = state.clone();
     tokio::task::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::new(5, 0)).await;
+            tokio::time::sleep(Duration::new(15, 0)).await;
             tracing::trace!("Tick cleanup");
-            state2.pool.clean();
+            let num_removed = state2.pool.clean();
+            tracing::debug!(
+                "Purged {} connections ({} alive)",
+                num_removed,
+                state2.pool.len()
+            );
         }
     });
 
@@ -119,31 +131,35 @@ where
         addr,
     };
 
-    let stream = match state
-        .pool
-        .get(SocketId(packet.header.destination_socket_id))
-    {
-        Some(mut conn) => {
-            conn.last_packet_time = Instant::now();
-            conn.packets_recv += 1;
-            conn.bytes_recv += packet.size() as u32;
-            state.pool.insert(conn.clone());
+    // A destination socket id of 0 indicates a handshake request.
+    if packet.header.destination_socket_id == 0 {
+        tracing::debug!("New connection from {}", addr);
+
+        match packet.downcast() {
+            Ok(packet) => {
+                super::handshake::handshake(packet, stream, state).await?;
+            }
+            Err(err) => {
+                tracing::debug!("Failed to downcast packet: {}", err);
+            }
+        }
+
+        return Ok(());
+    }
+
+    let stream = match state.pool.get(ConnectionId {
+        addr,
+        socket_id: packet.header.destination_socket_id.into(),
+    }) {
+        Some(conn) => {
+            *conn.last_packet_time.lock().unwrap() = Instant::now();
+            conn.packets_recv.fetch_add(1, Ordering::Relaxed);
+            conn.bytes_recv
+                .fetch_add(packet.size() as u32, Ordering::Relaxed);
 
             SrtConnStream { stream, conn }
         }
-        // New Packet from unknown client.
-        None => {
-            match packet.downcast() {
-                Ok(packet) => {
-                    super::handshake::handshake_new(packet, stream, state).await?;
-                }
-                Err(err) => {
-                    tracing::debug!("Failed to downcast packet: {}", err);
-                }
-            }
-
-            return Ok(());
-        }
+        None => return Ok(()),
     };
 
     tracing::debug!(
@@ -154,9 +170,7 @@ where
     match packet.header.packet_type() {
         PacketType::Control => match packet.header.as_control().unwrap().control_type() {
             ControlPacketType::Handshake => {
-                if let Ok(packet) = packet.downcast() {
-                    super::handshake::handshake(packet, stream, state).await?;
-                }
+                tracing::debug!("Got handshake request with non-zero desination socket id");
             }
             ControlPacketType::AckAck => match packet.downcast() {
                 Ok(packet) => super::ack::ackack(packet, stream, state).await?,
@@ -185,8 +199,8 @@ where
 
 #[derive(Copy, Clone, Debug)]
 pub struct SrtStream<'a> {
-    socket: &'a UdpSocket,
-    addr: SocketAddr,
+    pub socket: &'a UdpSocket,
+    pub addr: SocketAddr,
 }
 
 impl<'a> SrtStream<'a> {
@@ -206,7 +220,7 @@ where
     M: MultiSink,
 {
     pub stream: SrtStream<'a>,
-    pub conn: Connection<M::Sink>,
+    pub conn: Arc<Connection<M::Sink>>,
 }
 
 impl<'a, M> SrtConnStream<'a, M>

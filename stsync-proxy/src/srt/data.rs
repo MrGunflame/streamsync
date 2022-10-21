@@ -9,7 +9,7 @@ use super::{proto::Ack, server::SrtConnStream, state::State, DataPacket, Error};
 
 pub async fn handle_data<S>(
     packet: DataPacket,
-    mut stream: SrtConnStream<'_, S>,
+    stream: SrtConnStream<'_, S>,
     state: State<S>,
 ) -> Result<(), Error>
 where
@@ -18,22 +18,22 @@ where
     let seqnum = packet.packet_sequence_number();
     tracing::debug!("SEQNUM {}", seqnum);
 
-    if let Err(err) = stream.conn.write_sink(&state, seqnum, packet.data).await {
+    if let Err(err) = stream.conn.write_sink(&state, packet).await {
         tracing::error!("Failed to write to sink");
     }
 
     let client_sequence_number = stream.conn.client_sequence_number.load(Ordering::Acquire);
-    if client_sequence_number != seqnum {
-        // We lost a packet. Send a NAK.
-        tracing::trace!("Lost packet {}", client_sequence_number);
-        // TODO: NAK
-        let nak = Nak::builder()
-            .lost_packet_sequence_number(client_sequence_number)
-            .build();
+    // if client_sequence_number != seqnum {
+    //     // We lost a packet. Send a NAK.
+    //     tracing::trace!("Lost packet {}", client_sequence_number);
+    //     // TODO: NAK
+    //     let nak = Nak::builder()
+    //         .lost_packet_sequence_number(client_sequence_number)
+    //         .build();
 
-        stream.send(nak).await?;
-        return Ok(());
-    }
+    //     stream.send(nak).await?;
+    //     return Ok(());
+    // }
 
     let mut inflight_acks = stream.conn.inflight_acks.lock().unwrap();
     // Full ACK every 10ms.

@@ -31,11 +31,6 @@ where
     tracing::info!("Listing on {}", socket.local_addr()?);
 
     let state = State::new(sink, config);
-    state.pool.insert(Connection::new(
-        SocketAddr::from(([127, 0, 0, 1], 69)),
-        0,
-        0,
-    ));
 
     // Clean regularly
     let state2 = state.clone();

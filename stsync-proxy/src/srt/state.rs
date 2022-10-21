@@ -18,7 +18,7 @@ use crate::sink::{MultiSink, SessionId};
 use super::config::Config;
 use super::conn::AckQueue;
 use super::sink::OutputSink;
-use super::{HandshakeType, Header};
+use super::{DataPacket, HandshakeType, Header};
 
 #[derive(Clone)]
 pub struct State<S>
@@ -208,24 +208,21 @@ where
         self.start_time + time
     }
 
-    pub async fn write_sink<M>(
-        &self,
-        state: &State<M>,
-        seqnum: u32,
-        buf: Vec<u8>,
-    ) -> Result<(), S::Error>
+    pub async fn write_sink<M>(&self, state: &State<M>, packet: DataPacket) -> Result<(), S::Error>
     where
         M: MultiSink<Sink = S>,
         S: Unpin,
     {
         let mut sink = self.sink.lock().unwrap();
 
+        let seqnum = packet.packet_sequence_number();
+
         match &mut *sink {
-            Some(sink) => sink.push(seqnum, buf).await,
+            Some(sink) => sink.push(packet).await,
             None => {
                 let new = state.sink.attach(SessionId(self.server_socket_id.0 as u64));
                 *sink = Some(OutputSink::new(new, seqnum));
-                sink.as_mut().unwrap().push(seqnum, buf).await
+                sink.as_mut().unwrap().push(packet).await
             }
         }
     }
@@ -345,21 +342,21 @@ impl Rtt {
             .fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
                 let (mut rtt, mut var) = Self::from_bits(bits);
 
-                var = ((3.0 / 4.0) * var as f32 + (1.0 / 4.0) * var.abs_diff(new) as f32) as u32;
-                rtt = ((7.0 / 8.0) * rtt as f32 + (1.0 / 8.0) * rtt as f32) as u32;
+                var = ((3.0 / 4.0) * var as f32 + (1.0 / 4.0) * rtt.abs_diff(new) as f32) as u32;
+                rtt = ((7.0 / 8.0) * rtt as f32 + (1.0 / 8.0) * new as f32) as u32;
 
                 Some(Self::to_bits(rtt, var))
             });
     }
 
     const fn from_bits(bits: u64) -> (u32, u32) {
-        let rtt = (bits & ((1 << 31) - 1)) as u32;
-        let var = (bits >> 32) as u32;
+        let rtt = (bits >> 32) as u32;
+        let var = (bits & ((1 << 31) - 1)) as u32;
         (rtt, var)
     }
 
     const fn to_bits(rtt: u32, var: u32) -> u64 {
-        rtt as u64 + (var as u64) << 32
+        ((rtt as u64) << 32) + var as u64
     }
 }
 
@@ -378,6 +375,8 @@ mod tests {
         srt::state::{Connection, ConnectionId, SocketId},
     };
 
+    use super::Rtt;
+
     #[test]
     fn test_set() {
         let addr = SocketAddr::from(([127, 0, 0, 1], 80));
@@ -386,5 +385,17 @@ mod tests {
         set.insert(Connection::new(addr, socket_id, 0));
 
         assert!(set.get(&ConnectionId { addr, socket_id }).is_some());
+    }
+
+    #[test]
+    fn test_rtt() {
+        let rtt = Rtt::new();
+        assert_eq!(rtt.load(), (100_000, 50_000));
+        rtt.update(100_000);
+        assert_eq!(rtt.load(), (100_000, 37_500));
+
+        let rtt = Rtt::new();
+        rtt.update(0);
+        assert_eq!(rtt.load(), (87_500, 62_500));
     }
 }

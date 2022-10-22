@@ -17,6 +17,7 @@ use crate::sink::{MultiSink, SessionId};
 
 use super::config::Config;
 use super::conn::AckQueue;
+use super::metrics::ConnectionMetrics;
 use super::sink::OutputSink;
 use super::{DataPacket, HandshakeType, Header};
 
@@ -162,11 +163,12 @@ where
     /// Relative timestamp of the last transmitted message. We drop the connection when this
     /// reaches 5s.
     pub last_packet_time: Mutex<Instant>,
+    pub metrics: ConnectionMetrics,
 }
 
 impl<S> Connection<S>
 where
-    S: Sink<Vec<u8>>,
+    S: Sink<Vec<u8>> + Unpin,
 {
     pub fn new<T, U>(addr: SocketAddr, server_socket_id: T, client_socket_id: U) -> Self
     where
@@ -193,6 +195,7 @@ where
             last_packet_time: Mutex::new(Instant::now()),
             packets_recv: AtomicU32::new(0),
             bytes_recv: AtomicU32::new(0),
+            metrics: ConnectionMetrics::new(),
         }
     }
 
@@ -211,7 +214,6 @@ where
     pub async fn write_sink<M>(&self, state: &State<M>, packet: DataPacket) -> Result<(), S::Error>
     where
         M: MultiSink<Sink = S>,
-        S: Unpin,
     {
         let mut sink = self.sink.lock().unwrap();
 
@@ -221,9 +223,16 @@ where
             Some(sink) => sink.push(packet).await,
             None => {
                 let new = state.sink.attach(SessionId(self.server_socket_id.0 as u64));
-                *sink = Some(OutputSink::new(new, seqnum));
+                *sink = Some(OutputSink::new(self, new, seqnum));
                 sink.as_mut().unwrap().push(packet).await
             }
+        }
+    }
+
+    pub async fn close(&self) {
+        let mut sink = self.sink.lock().unwrap();
+        if let Some(sink) = &mut *sink {
+            let _ = sink.close().await;
         }
     }
 }

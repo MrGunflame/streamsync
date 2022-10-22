@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use futures::{Sink, SinkExt};
 
+use super::state::Connection;
 use super::DataPacket;
 
 #[derive(Debug)]
@@ -15,18 +16,24 @@ where
     sink: S,
     queue: BufferQueue,
     skip_counter: u8,
+
+    /// Reference to the connection owning this sink. The connection is always guaranteed to
+    /// outlive the sink it owns. Since [`Connection`] usually comes wrapped in an Arc, it must
+    /// not dereferenced mutably.
+    conn: *const Connection<S>,
 }
 
 impl<S> OutputSink<S>
 where
     S: Sink<Vec<u8>> + Unpin,
 {
-    pub fn new(sink: S, seqnum: u32) -> Self {
+    pub fn new(conn: &Connection<S>, sink: S, seqnum: u32) -> Self {
         Self {
             next_seqnum: seqnum,
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
+            conn: conn as *const _,
         }
     }
 
@@ -70,12 +77,22 @@ where
             if self.skip_counter >= 20 {
                 self.skip_counter = 0;
                 tracing::trace!("Skip ahead (lost 20 segments)");
+                let mut num_catched = 0;
                 while self.next_seqnum <= seqnum {
                     if let Some(buf) = self.queue.remove(self.next_seqnum) {
                         self.sink.feed(buf).await?;
+                        num_catched += 1;
                     }
 
                     self.next_seqnum += 1;
+                }
+
+                tracing::trace!("Recovered {} segments", num_catched);
+
+                // SAFETY: The connection is owning this sink. See struct def for details.
+                unsafe {
+                    let conn = &*self.conn;
+                    conn.metrics.packets_dropped.add(20 - num_catched);
                 }
             }
         }
@@ -90,6 +107,9 @@ where
         self.sink.close().await
     }
 }
+
+unsafe impl<S> Send for OutputSink<S> where S: Sink<Vec<u8>> {}
+unsafe impl<S> Sync for OutputSink<S> where S: Sink<Vec<u8>> {}
 
 #[derive(Clone, Debug, Default)]
 pub struct BufferQueue {

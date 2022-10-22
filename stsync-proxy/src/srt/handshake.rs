@@ -5,8 +5,7 @@ use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::sink::MultiSink;
 use crate::srt::state::{ConnectionId, ConnectionState, SocketId};
-
-const SRT_MAGIC: u16 = 0xA17;
+use crate::srt::{ExtensionField, ExtensionType, HandshakeExtension};
 
 static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -42,7 +41,7 @@ where
     // Check if the handshake induction is valid.
     srt_assert!(packet.version, 4);
     srt_assert!(packet.encryption_field, 0);
-    srt_assert!(packet.extension_field, 2);
+    srt_assert!(packet.extension_field, ExtensionField::INDUCTION);
     srt_assert!(packet.handshake_type, HandshakeType::Induction);
     srt_assert!(packet.syn_cookie, 0);
 
@@ -62,7 +61,7 @@ where
     resp.header.destination_socket_id = client_socket_id;
     // SRT magic
     resp.version = 5;
-    resp.extension_field = 0x4A17;
+    resp.extension_field = ExtensionField::SRT_MAGIC;
     resp.srt_socket_id = server_socket_id;
     resp.handshake_type = HandshakeType::Induction;
     resp.syn_cookie = syn_cookie;
@@ -102,6 +101,8 @@ pub async fn handshake<S>(
 where
     S: MultiSink,
 {
+    tracing::info!("{:?}", packet);
+
     match packet.handshake_type {
         HandshakeType::Induction => handshake_induction(packet, stream, state).await,
         HandshakeType::Conclusion => handshake_conclusion(packet, stream, state).await,
@@ -125,7 +126,7 @@ where
 
     srt_assert!(packet.version, 4);
     srt_assert!(packet.encryption_field, 0);
-    srt_assert!(packet.extension_field, 2);
+    srt_assert!(packet.extension_field, ExtensionField::INDUCTION);
     srt_assert!(packet.syn_cookie, 0);
 
     let client_socket_id = packet.srt_socket_id;
@@ -143,7 +144,7 @@ where
 
     resp.handshake_type = HandshakeType::Induction;
     resp.version = 5;
-    resp.extension_field = SRT_MAGIC;
+    resp.extension_field = ExtensionField::SRT_MAGIC;
     resp.syn_cookie = syn_cookie;
     resp.srt_socket_id = server_socket_id;
     resp.initial_packet_sequence_number = server_seqnum;
@@ -200,6 +201,19 @@ where
     packet.syn_cookie = 0;
     packet.srt_socket_id = conn.server_socket_id.0;
     packet.initial_packet_sequence_number = conn.server_sequence_number.load(Ordering::Relaxed);
+
+    // Integrated handshake extensions
+    if let Some(mut ext) = packet.extensions.remove_hsreq() {
+        ext.sender_tsbpd_delay = conn.start_time.elapsed().as_micros() as u16;
+
+        packet.extensions.0.push(HandshakeExtension {
+            extension_type: ExtensionType::HsRsp,
+            extension_length: 3,
+            extension_content: ext.into(),
+        });
+    }
+
+    tracing::info!("RESP {:?}", packet);
 
     stream.send(packet).await?;
 

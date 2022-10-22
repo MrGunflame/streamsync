@@ -6,6 +6,7 @@ pub mod config;
 mod conn;
 mod data;
 mod handshake;
+mod metrics;
 pub mod proto;
 pub mod server;
 mod shutdown;
@@ -14,7 +15,10 @@ pub mod state;
 
 use std::{
     convert::Infallible,
-    io::{self, Read, Write},
+    fmt::Debug,
+    io::{self, ErrorKind, Read, Write},
+    ops::BitAnd,
+    string::FromUtf8Error,
 };
 
 use crate::proto::{Bits, Decode, Encode, U32};
@@ -29,6 +33,12 @@ pub enum Error {
     InvalidHandshakeType(u32),
     #[error("invalid control type: {0}")]
     InvalidControlType(u16),
+    #[error("invalid extension type {0}")]
+    InvalidExtensionType(u16),
+    #[error("{0}")]
+    FromUtf8Error(FromUtf8Error),
+    #[error("unsupported extension {0:?}")]
+    UnsupportedExtension(ExtensionType),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -346,7 +356,7 @@ pub struct HandshakePacket {
     /// Listener. (2) In the case of a CONCLUSION message, this field
     /// value should contain a combination of Extension Type values.  For
     /// more details, see Section 4.3.1.
-    extension_field: u16,
+    extension_field: ExtensionField,
     /// The sequence number of the very first data packet to be sent.
     initial_packet_sequence_number: u32,
     /// This value is typically set
@@ -373,15 +383,7 @@ pub struct HandshakePacket {
     /// sender.  The value consists of four 32-bit fields.  In the case of
     /// IPv4 addresses, fields 2, 3 and 4 are filled with zeroes.
     peer_ip_address: u128,
-    /// The value of this field is used to process
-    /// an integrated handshake.  Each extension can have a pair of
-    /// request and response types.
-    extension_type: u16,
-    /// The length of the Extension Contents
-    /// field in four-byte blocks.
-    extension_length: u16,
-    /// Extension Contents: variable length.  The payload of the extension.
-    extension_contents: Vec<u8>,
+    extensions: Extensions,
 }
 
 impl HandshakePacket {
@@ -399,10 +401,8 @@ impl HandshakePacket {
         self.srt_socket_id.encode(&mut writer)?;
         self.syn_cookie.encode(&mut writer)?;
         self.peer_ip_address.encode(&mut writer)?;
-        self.extension_type.encode(&mut writer)?;
-        self.extension_length.encode(&mut writer)?;
+        self.extensions.encode(writer)?;
 
-        writer.write_all(&self.extension_contents)?;
         Ok(())
     }
 
@@ -412,7 +412,7 @@ impl HandshakePacket {
     {
         let version = u32::decode(&mut reader)?;
         let encryption_field = u16::decode(&mut reader)?;
-        let extension_field = u16::decode(&mut reader)?;
+        let extension_field = ExtensionField::decode(&mut reader)?;
         let initial_packet_sequence_number = u32::decode(&mut reader)?;
         let maximum_transmission_unit_size = u32::decode(&mut reader)?;
         let maximum_flow_window_size = u32::decode(&mut reader)?;
@@ -420,10 +420,7 @@ impl HandshakePacket {
         let srt_socket_id = u32::decode(&mut reader)?;
         let syn_cookie = u32::decode(&mut reader)?;
         let peer_ip_address = u128::decode(&mut reader)?;
-        // let extension_type = u16::decode(&mut reader)?;
-        // let extension_length = u16::decode(&mut reader)?;
-        // TODO: impl
-        // let extension_contents = Vec::new();
+        let extensions = Extensions::decode(reader)?;
 
         Ok(Self {
             header: Header::default(),
@@ -437,9 +434,7 @@ impl HandshakePacket {
             srt_socket_id,
             syn_cookie,
             peer_ip_address,
-            extension_type: 0,
-            extension_length: 0,
-            extension_contents: vec![],
+            extensions,
         })
     }
 }
@@ -488,10 +483,8 @@ impl Encode for HandshakePacket {
         self.srt_socket_id.encode(&mut writer)?;
         self.syn_cookie.encode(&mut writer)?;
         self.peer_ip_address.encode(&mut writer)?;
-        self.extension_type.encode(&mut writer)?;
-        self.extension_length.encode(&mut writer)?;
+        self.extensions.encode(&mut writer)?;
 
-        writer.write_all(&self.extension_contents)?;
         Ok(())
     }
 }
@@ -507,7 +500,7 @@ impl Decode for HandshakePacket {
 
         let version = u32::decode(&mut reader)?;
         let encryption_field = u16::decode(&mut reader)?;
-        let extension_field = u16::decode(&mut reader)?;
+        let extension_field = ExtensionField::decode(&mut reader)?;
         let initial_packet_sequence_number = u32::decode(&mut reader)?;
         let maximum_transmission_unit_size = u32::decode(&mut reader)?;
         let maximum_flow_window_size = u32::decode(&mut reader)?;
@@ -515,10 +508,7 @@ impl Decode for HandshakePacket {
         let srt_socket_id = u32::decode(&mut reader)?;
         let syn_cookie = u32::decode(&mut reader)?;
         let peer_ip_address = u128::decode(&mut reader)?;
-        let extension_type = u16::decode(&mut reader)?;
-        let extension_length = u16::decode(&mut reader)?;
-        // TODO: impl
-        let extension_contents = Vec::new();
+        let extensions = Extensions::decode(reader)?;
 
         Ok(Self {
             header,
@@ -532,9 +522,7 @@ impl Decode for HandshakePacket {
             srt_socket_id,
             syn_cookie,
             peer_ip_address,
-            extension_type,
-            extension_length,
-            extension_contents,
+            extensions,
         })
     }
 }
@@ -779,6 +767,83 @@ impl Encode for AckPacket {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+#[repr(transparent)]
+pub struct Extensions(pub Vec<HandshakeExtension>);
+
+impl Extensions {
+    pub fn hsreq(&self) -> Option<HandshakeExtensionMessage> {
+        for ext in &self.0 {
+            if let ExtensionContent::Handshake(ext) = ext.extension_content {
+                return Some(ext);
+            }
+        }
+
+        None
+    }
+
+    pub fn remove_hsreq(&mut self) -> Option<HandshakeExtensionMessage> {
+        let mut index: usize = 0;
+
+        while index < self.0.len() {
+            let ext = unsafe { self.0.get_unchecked(index) };
+
+            if ext.extension_type == ExtensionType::HsReq {
+                if let ExtensionContent::Handshake(ext) = ext.extension_content {
+                    self.0.remove(index);
+                    return Some(ext);
+                }
+            }
+
+            index += 1;
+        }
+
+        None
+    }
+}
+
+impl Encode for Extensions {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        for ext in &self.0 {
+            ext.encode(&mut writer)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Decode for Extensions {
+    type Error = Error;
+
+    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        // TODO: Preallocate
+        let mut extensions = Vec::new();
+        loop {
+            match HandshakeExtension::decode(&mut reader) {
+                Ok(ext) => {
+                    extensions.push(ext);
+                }
+                Err(Error::Io(err)) => {
+                    if err.kind() == ErrorKind::UnexpectedEof {
+                        return Ok(Self(extensions));
+                    } else {
+                        return Err(err.into());
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PeerIpAddress([u8; 8]);
 
@@ -797,4 +862,345 @@ pub trait IsPacket: Sized {
     /// Note that `downcast` only reads from the front. Any bytes unnecessary for the downcasting
     /// process will be dropped.
     fn downcast(packet: Packet) -> Result<Self, Self::Error>;
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ExtensionType {
+    #[default]
+    HsReq,
+    HsRsp,
+    KmReq,
+    KmRsp,
+    Sid,
+    Congestion,
+    Filter,
+    Group,
+}
+
+impl ExtensionType {
+    pub const fn to_u16(&self) -> u16 {
+        match self {
+            Self::HsReq => 1,
+            Self::HsRsp => 2,
+            Self::KmReq => 3,
+            Self::KmRsp => 4,
+            Self::Sid => 5,
+            Self::Congestion => 6,
+            Self::Filter => 7,
+            Self::Group => 8,
+        }
+    }
+
+    pub const fn from_u16(n: u16) -> Option<Self> {
+        match n {
+            1 => Some(Self::HsReq),
+            2 => Some(Self::HsRsp),
+            3 => Some(Self::KmReq),
+            4 => Some(Self::KmRsp),
+            5 => Some(Self::Sid),
+            6 => Some(Self::Congestion),
+            7 => Some(Self::Filter),
+            8 => Some(Self::Group),
+            _ => None,
+        }
+    }
+}
+
+impl Encode for ExtensionType {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.to_u16().encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for ExtensionType {
+    type Error = Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let n = u16::decode(reader)?;
+        match Self::from_u16(n) {
+            Some(t) => Ok(t),
+            None => Err(Error::InvalidExtensionType(n)),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HandshakeExtension {
+    pub extension_type: ExtensionType,
+    /// Length of the content **IN FOUR-BYTE GROUPS**. In order word to get the length of 3
+    /// multiply by 3: `let bytes = extension_length * 3;`.
+    pub extension_length: u16,
+    pub extension_content: ExtensionContent,
+}
+
+impl HandshakeExtension {}
+
+impl Encode for HandshakeExtension {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.extension_type.encode(&mut writer)?;
+        self.extension_length.encode(&mut writer)?;
+
+        match &self.extension_content {
+            ExtensionContent::Handshake(ext) => ext.encode(writer),
+            ExtensionContent::KeyMaterial(ext) => ext.encode(writer),
+            ExtensionContent::StreamId(ext) => ext.encode(writer),
+            ExtensionContent::Group(_) => Ok(()),
+        }
+    }
+}
+
+impl Decode for HandshakeExtension {
+    type Error = Error;
+
+    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let extension_type = ExtensionType::decode(&mut reader)?;
+        let extension_length = u16::decode(&mut reader)?;
+
+        let extension_content = match extension_type {
+            ExtensionType::HsReq | ExtensionType::HsRsp => {
+                ExtensionContent::Handshake(HandshakeExtensionMessage::decode(reader)?)
+            }
+            ExtensionType::Sid => ExtensionContent::StreamId(StreamIdExtension::decode(reader)?),
+            _ => return Err(Error::UnsupportedExtension(extension_type)),
+        };
+
+        Ok(Self {
+            extension_type,
+            extension_length,
+            extension_content,
+        })
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct HandshakeExtensionMessage {
+    pub srt_version: u32,
+    pub srt_flags: u32,
+    pub receiver_tsbpd_delay: u16,
+    pub sender_tsbpd_delay: u16,
+}
+
+impl Encode for HandshakeExtensionMessage {
+    type Error = Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.srt_version.encode(&mut writer)?;
+        self.srt_flags.encode(&mut writer)?;
+        self.receiver_tsbpd_delay.encode(&mut writer)?;
+        self.sender_tsbpd_delay.encode(&mut writer)?;
+
+        Ok(())
+    }
+}
+
+impl Decode for HandshakeExtensionMessage {
+    type Error = Error;
+
+    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let srt_version = u32::decode(&mut reader)?;
+        let srt_flags = u32::decode(&mut reader)?;
+        let receiver_tsbpd_delay = u16::decode(&mut reader)?;
+        let sender_tsbpd_delay = u16::decode(&mut reader)?;
+
+        Ok(Self {
+            srt_version,
+            srt_flags,
+            receiver_tsbpd_delay,
+            sender_tsbpd_delay,
+        })
+    }
+}
+
+impl HandshakeExtensionMessage {
+    // https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-3.2.1.1.1
+    const TSBPDSND: u32 = 1 << 0;
+    const TSBPDRCV: u32 = 1 << 1;
+    const CRYPT: u32 = 1 << 2;
+    const TLPKTDROP: u32 = 1 << 3;
+    const PERIODICNAK: u32 = 1 << 4;
+    const REXMITFLG: u32 = 1 << 5;
+    const STREAM: u32 = 1 << 6;
+    const PACKET_FILTER: u32 = 1 << 7;
+}
+
+#[derive(Clone, Debug)]
+pub struct KeyMaterialExtension {
+    // TOOO: impl
+}
+
+impl Encode for KeyMaterialExtension {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        Ok(())
+    }
+}
+
+impl Decode for KeyMaterialExtension {
+    type Error = Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        Ok(Self {})
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StreamIdExtension {
+    pub content: String,
+}
+
+impl Encode for StreamIdExtension {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.content.as_bytes().encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for StreamIdExtension {
+    type Error = Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let buf = Vec::decode(reader)?;
+
+        match String::from_utf8(buf) {
+            Ok(content) => Ok(Self { content }),
+            Err(err) => Err(Error::FromUtf8Error(err)),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Default, PartialEq, Eq, Hash)]
+pub struct ExtensionField(u16);
+
+impl ExtensionField {
+    /// The initial value for the INDUCTION phase.
+    pub const INDUCTION: Self = Self(2);
+    /// The srt magic `0xA17` for the CONCLUSION phase.
+    pub const SRT_MAGIC: Self = Self(0xA17);
+
+    pub const HSREQ: Self = Self(1);
+    pub const KMREQ: Self = Self(1 << 1);
+    pub const CONFIG: Self = Self(1 << 2);
+
+    pub fn is_magic(&self) -> bool {
+        *self == Self::SRT_MAGIC
+    }
+
+    pub const fn hsreq(&self) -> bool {
+        self.0 & Self::HSREQ.0 != 0
+    }
+
+    pub const fn kmreg(&self) -> bool {
+        self.0 & Self::KMREQ.0 != 0
+    }
+
+    pub const fn config(&self) -> bool {
+        self.0 & Self::CONFIG.0 != 0
+    }
+}
+
+impl Encode for ExtensionField {
+    type Error = io::Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.0.encode(writer)
+    }
+}
+
+impl Decode for ExtensionField {
+    type Error = io::Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        Ok(Self(u16::decode(reader)?))
+    }
+}
+
+impl Debug for ExtensionField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hsreq = if self.hsreq() { "HSREQ, " } else { "" };
+        let kmreq = if self.kmreg() { "KMREQ, " } else { "" };
+        let config = if self.config() { "CONFIG" } else { "" };
+
+        write!(f, "ExtensionField {{ {}{}{} }}", hsreq, kmreq, config)
+    }
+}
+
+/// See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-3.2.1
+#[derive(Clone, Debug)]
+pub enum ExtensionContent {
+    Handshake(HandshakeExtensionMessage),
+    KeyMaterial(KeyMaterialExtension),
+    StreamId(StreamIdExtension),
+    /// Unimplemented in current standart.
+    Group(()),
+}
+
+impl ExtensionContent {
+    pub fn len(&self) -> u32 {
+        match self {
+            Self::Handshake(_) => 3,
+            // Unimplemented
+            Self::KeyMaterial(_) => 0,
+            Self::StreamId(ext) => {
+                let len = ext.content.len() as u32;
+                match len % 3 {
+                    0 => len,
+                    1 => len + 2,
+                    2 => len + 3,
+                    _ => unreachable!(),
+                }
+            }
+            // unimplemented
+            Self::Group(_) => 0,
+        }
+    }
+}
+
+impl From<HandshakeExtensionMessage> for ExtensionContent {
+    fn from(src: HandshakeExtensionMessage) -> Self {
+        Self::Handshake(src)
+    }
 }

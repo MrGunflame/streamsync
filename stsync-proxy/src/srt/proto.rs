@@ -22,6 +22,23 @@ impl Keepalive {
     }
 }
 
+impl IsPacket for Keepalive {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        Packet {
+            header: self.header,
+            body: Vec::new(),
+        }
+    }
+
+    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
+        Ok(Self {
+            header: packet.header,
+        })
+    }
+}
+
 impl Encode for Keepalive {
     type Error = Error;
 

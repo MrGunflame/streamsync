@@ -152,6 +152,9 @@ where
             conn.bytes_recv
                 .fetch_add(packet.size() as u32, Ordering::Relaxed);
 
+            conn.metrics.packets_recv.add(1);
+            conn.metrics.bytes_recv.add(packet.size());
+
             SrtConnStream { stream, conn }
         }
         None => return Ok(()),
@@ -174,6 +177,10 @@ where
             ControlPacketType::Shutdown => match packet.downcast() {
                 Ok(packet) => super::shutdown::shutdown(packet, stream, state).await?,
                 Err(err) => tracing::trace!("Failed to downcast packet to Shutdown: {}", err),
+            },
+            ControlPacketType::Keepalive => match packet.downcast() {
+                Ok(packet) => keepalive(packet, stream).await?,
+                Err(err) => tracing::trace!("Failed to downcast packet to Keepalive: {}", err),
             },
             _ => {
                 tracing::warn!("Unhandled control packet");
@@ -230,13 +237,40 @@ where
         packet.header.timestamp = self.conn.timestamp();
         packet.header.destination_socket_id = self.conn.client_socket_id.0;
 
+        self.conn.metrics.packets_sent.add(1);
+        self.conn.metrics.bytes_sent.add(packet.size());
+
         self.stream.send(packet).await
     }
 }
 
-async fn keepalive<S>(packet: Packet, state: &Arc<State<S>>, socket: &Arc<UdpSocket>)
+async fn keepalive<M>(_packet: Keepalive, stream: SrtConnStream<'_, M>) -> Result<(), Error>
 where
-    S: MultiSink,
+    M: MultiSink,
 {
-    let mut resp = Keepalive::builder().build();
+    let resp = Keepalive::builder().build();
+    stream.send(resp).await?;
+    Ok(())
+}
+
+pub fn close_metrics<S>(conn: &Connection<S>)
+where
+    S: Sink<Vec<u8>>,
+{
+    tracing::info!("Connection to {} closed", conn.id.addr);
+    tracing::info!(
+        "Connection metrics:\n
+        |  SENT  | RECV | DROP | RTT |\n
+        | ------ | ---- | ---- | --- |\n
+        | {}     | {}   | {}   | {}us |\n
+        | {}     | {}   | -    | {}us |\n
+        ",
+        conn.metrics.packets_sent,
+        conn.metrics.packets_recv,
+        conn.metrics.packets_dropped,
+        conn.rtt.load().0,
+        conn.metrics.bytes_sent,
+        conn.metrics.bytes_recv,
+        conn.rtt.load().1,
+    );
 }

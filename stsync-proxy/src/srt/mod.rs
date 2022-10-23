@@ -17,7 +17,7 @@ use std::{
     convert::Infallible,
     fmt::Debug,
     io::{self, ErrorKind, Read, Write},
-    ops::BitAnd,
+    ops::{BitAnd, BitOr},
     string::FromUtf8Error,
 };
 
@@ -851,7 +851,7 @@ impl Extensions {
         while index < self.0.len() {
             let ext = unsafe { self.0.get_unchecked(index) };
 
-            if ext.extension_type == ExtensionType::HsReq {
+            if ext.extension_type == ExtensionType::HSREQ {
                 if let ExtensionContent::Handshake(ext) = ext.extension_content {
                     self.0.remove(index);
                     return Some(ext);
@@ -870,7 +870,7 @@ impl Extensions {
         while index < self.0.len() {
             let ext = unsafe { self.0.get_unchecked(index) };
 
-            if ext.extension_type == ExtensionType::Sid {
+            if ext.extension_type == ExtensionType::SID {
                 if let ExtensionContent::StreamId(ext) = ext.extension_content.clone() {
                     self.0.remove(index);
                     return Some(ext);
@@ -947,42 +947,32 @@ pub trait IsPacket: Sized {
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ExtensionType {
-    #[default]
-    HsReq,
-    HsRsp,
-    KmReq,
-    KmRsp,
-    Sid,
-    Congestion,
-    Filter,
-    Group,
-}
+pub struct ExtensionType(u16);
 
 impl ExtensionType {
-    pub const fn to_u16(&self) -> u16 {
-        match self {
-            Self::HsReq => 1,
-            Self::HsRsp => 2,
-            Self::KmReq => 3,
-            Self::KmRsp => 4,
-            Self::Sid => 5,
-            Self::Congestion => 6,
-            Self::Filter => 7,
-            Self::Group => 8,
-        }
+    pub const HSREQ: Self = Self(1);
+    pub const HSRSP: Self = Self(2);
+    pub const KMREQ: Self = Self(3);
+    pub const KMRSP: Self = Self(4);
+    pub const SID: Self = Self(5);
+    pub const CONGESTION: Self = Self(6);
+    pub const FILTER: Self = Self(7);
+    pub const GROUP: Self = Self(8);
+
+    pub const fn to_u16(self) -> u16 {
+        self.0
     }
 
     pub const fn from_u16(n: u16) -> Option<Self> {
         match n {
-            1 => Some(Self::HsReq),
-            2 => Some(Self::HsRsp),
-            3 => Some(Self::KmReq),
-            4 => Some(Self::KmRsp),
-            5 => Some(Self::Sid),
-            6 => Some(Self::Congestion),
-            7 => Some(Self::Filter),
-            8 => Some(Self::Group),
+            n if n == Self::HSREQ.0 => Some(Self::HSREQ),
+            n if n == Self::HSRSP.0 => Some(Self::HSRSP),
+            n if n == Self::KMREQ.0 => Some(Self::KMREQ),
+            n if n == Self::KMRSP.0 => Some(Self::KMRSP),
+            n if n == Self::SID.0 => Some(Self::SID),
+            n if n == Self::CONGESTION.0 => Some(Self::CONGESTION),
+            n if n == Self::FILTER.0 => Some(Self::FILTER),
+            n if n == Self::GROUP.0 => Some(Self::GROUP),
             _ => None,
         }
     }
@@ -1056,10 +1046,10 @@ impl Decode for HandshakeExtension {
         let extension_length = u16::decode(&mut reader)?;
 
         let extension_content = match extension_type {
-            ExtensionType::HsReq | ExtensionType::HsRsp => {
+            ExtensionType::HSREQ | ExtensionType::HSRSP => {
                 ExtensionContent::Handshake(HandshakeExtensionMessage::decode(reader)?)
             }
-            ExtensionType::Sid => ExtensionContent::StreamId(StreamIdExtension::decode(reader)?),
+            ExtensionType::SID => ExtensionContent::StreamId(StreamIdExtension::decode(reader)?),
             _ => return Err(Error::UnsupportedExtension(extension_type)),
         };
 
@@ -1074,7 +1064,7 @@ impl Decode for HandshakeExtension {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct HandshakeExtensionMessage {
     pub srt_version: u32,
-    pub srt_flags: u32,
+    pub srt_flags: HandshakeExtensionFlags,
     pub receiver_tsbpd_delay: u16,
     pub sender_tsbpd_delay: u16,
 }
@@ -1103,7 +1093,7 @@ impl Decode for HandshakeExtensionMessage {
         R: Read,
     {
         let srt_version = u32::decode(&mut reader)?;
-        let srt_flags = u32::decode(&mut reader)?;
+        let srt_flags = HandshakeExtensionFlags::decode(&mut reader)?;
         let receiver_tsbpd_delay = u16::decode(&mut reader)?;
         let sender_tsbpd_delay = u16::decode(&mut reader)?;
 
@@ -1116,16 +1106,92 @@ impl Decode for HandshakeExtensionMessage {
     }
 }
 
-impl HandshakeExtensionMessage {
-    // https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-3.2.1.1.1
-    const TSBPDSND: u32 = 1 << 0;
-    const TSBPDRCV: u32 = 1 << 1;
-    const CRYPT: u32 = 1 << 2;
-    const TLPKTDROP: u32 = 1 << 3;
-    const PERIODICNAK: u32 = 1 << 4;
-    const REXMITFLG: u32 = 1 << 5;
-    const STREAM: u32 = 1 << 6;
-    const PACKET_FILTER: u32 = 1 << 7;
+/// https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-3.2.1.1.1
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct HandshakeExtensionFlags(u32);
+
+impl HandshakeExtensionFlags {
+    /// TSBPDSND flag defines if the TSBPD mechanism (Section 4.5) will be
+    /// used for sending.
+    pub const TSBPDSND: Self = Self(1);
+
+    /// TSBPDRCV flag defines if the TSBPD mechanism (Section 4.5) will be
+    /// used for receiving.
+    pub const TSBPDRCV: Self = Self(1 << 1);
+
+    /// CRYPT flag MUST be set.  It is a legacy flag that indicates the
+    /// party understands KK field of the SRT Packet (Figure 3).
+    pub const CRYPT: Self = Self(1 << 2);
+
+    /// TLPKTDROP flag should be set if too-late packet drop mechanism
+    /// will be used during transmission.  See Section 4.6.
+    pub const TLPKTDROP: Self = Self(1 << 3);
+
+    /// PERIODICNAK flag set indicates the peer will send periodic NAK
+    /// packets.  See Section 4.8.2.
+    pub const PERIODICNAK: Self = Self(1 << 4);
+
+    /// REXMITFLG flag MUST be set.  It is a legacy flag that indicates
+    /// the peer understands the R field of the SRT DATA Packet
+    /// (Figure 3).
+    pub const REXMITFLG: Self = Self(1 << 5);
+
+    /// STREAM flag identifies the transmission mode (Section 4.2) to be
+    /// used in the connection.  If the flag is set, the buffer mode
+    /// (Section 4.2.2) is used.  Otherwise, the message mode
+    /// (Section 4.2.1) is used.
+    pub const STREAM: Self = Self(1 << 6);
+
+    /// PACKET_FILTER flag indicates if the peer supports packet filter.
+    pub const PACKET_FILTER: Self = Self(1 << 7);
+
+    pub const fn to_u32(self) -> u32 {
+        self.0
+    }
+
+    // TODO: FILTER ONLY VALID BITS
+    pub const fn from_u32(n: u32) -> Option<Self> {
+        Some(Self(n))
+    }
+}
+
+impl BitAnd for HandshakeExtensionFlags {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl BitOr for HandshakeExtensionFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl Encode for HandshakeExtensionFlags {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.0.encode(writer)?;
+        Ok(())
+    }
+}
+
+impl Decode for HandshakeExtensionFlags {
+    type Error = Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        Ok(Self(u32::decode(reader)?))
+    }
 }
 
 #[derive(Clone, Debug)]

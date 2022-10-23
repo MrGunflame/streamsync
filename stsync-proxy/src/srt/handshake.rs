@@ -207,10 +207,12 @@ where
         ext.sender_tsbpd_delay = conn.start_time.elapsed().as_micros() as u16;
 
         packet.extensions.0.push(HandshakeExtension {
-            extension_type: ExtensionType::HsRsp,
+            extension_type: ExtensionType::HSRSP,
             extension_length: 3,
             extension_content: ext.into(),
         });
+
+        packet.extension_field = ExtensionField::HSREQ;
     }
 
     if let Some(ext) = packet.extensions.remove_stream_id() {

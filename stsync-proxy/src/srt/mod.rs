@@ -800,6 +800,25 @@ impl Extensions {
 
         None
     }
+
+    pub fn remove_stream_id(&mut self) -> Option<StreamIdExtension> {
+        let mut index: usize = 0;
+
+        while index < self.0.len() {
+            let ext = unsafe { self.0.get_unchecked(index) };
+
+            if ext.extension_type == ExtensionType::Sid {
+                if let ExtensionContent::StreamId(ext) = ext.extension_content.clone() {
+                    self.0.remove(index);
+                    return Some(ext);
+                }
+            }
+
+            index += 1;
+        }
+
+        None
+    }
 }
 
 impl Encode for Extensions {
@@ -1112,8 +1131,8 @@ pub struct ExtensionField(u16);
 impl ExtensionField {
     /// The initial value for the INDUCTION phase.
     pub const INDUCTION: Self = Self(2);
-    /// The srt magic `0xA17` for the CONCLUSION phase.
-    pub const SRT_MAGIC: Self = Self(0xA17);
+    /// The srt magic `0x4A17` for the CONCLUSION phase.
+    pub const SRT_MAGIC: Self = Self(0x4A17);
 
     pub const HSREQ: Self = Self(1);
     pub const KMREQ: Self = Self(1 << 1);

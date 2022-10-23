@@ -213,6 +213,10 @@ where
         });
     }
 
+    if let Some(ext) = packet.extensions.remove_stream_id() {
+        tracing::info!("StreamId ext: {:?}", ext);
+    }
+
     tracing::info!("RESP {:?}", packet);
 
     stream.send(packet).await?;

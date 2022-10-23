@@ -18,7 +18,7 @@ use crate::proto::{Bits, Decode, Encode};
 use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::state::ConnectionId;
-use crate::srt::{AckPacket, ControlPacketType, PacketType};
+use crate::srt::{ControlPacketType, PacketType};
 
 use super::{Error, IsPacket, Packet};
 

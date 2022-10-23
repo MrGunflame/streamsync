@@ -42,7 +42,7 @@ where
     srt_assert!(packet.version, 4);
     srt_assert!(packet.encryption_field, 0);
     srt_assert!(packet.extension_field, ExtensionField::INDUCTION);
-    srt_assert!(packet.handshake_type, HandshakeType::Induction);
+    srt_assert!(packet.handshake_type, HandshakeType::INDUCTION);
     srt_assert!(packet.syn_cookie, 0);
 
     let client_socket_id = packet.srt_socket_id;
@@ -63,7 +63,7 @@ where
     resp.version = 5;
     resp.extension_field = ExtensionField::SRT_MAGIC;
     resp.srt_socket_id = server_socket_id;
-    resp.handshake_type = HandshakeType::Induction;
+    resp.handshake_type = HandshakeType::INDUCTION;
     resp.syn_cookie = syn_cookie;
 
     resp.initial_packet_sequence_number = server_seqnum;
@@ -104,8 +104,8 @@ where
     tracing::info!("{:?}", packet);
 
     match packet.handshake_type {
-        HandshakeType::Induction => handshake_induction(packet, stream, state).await,
-        HandshakeType::Conclusion => handshake_conclusion(packet, stream, state).await,
+        HandshakeType::INDUCTION => handshake_induction(packet, stream, state).await,
+        HandshakeType::CONCLUSION => handshake_conclusion(packet, stream, state).await,
         t => {
             tracing::debug!("Unsupported handshake type {:?}", t);
             Ok(())
@@ -122,7 +122,7 @@ where
     M: MultiSink,
 {
     tracing::trace!("INDUCTION");
-    debug_assert_eq!(packet.handshake_type, HandshakeType::Induction);
+    debug_assert!(packet.handshake_type.is_induction());
 
     srt_assert!(packet.version, 4);
     srt_assert!(packet.encryption_field, 0);
@@ -142,7 +142,7 @@ where
     resp.header.timestamp = 0;
     resp.header.destination_socket_id = client_socket_id;
 
-    resp.handshake_type = HandshakeType::Induction;
+    resp.handshake_type = HandshakeType::INDUCTION;
     resp.version = 5;
     resp.extension_field = ExtensionField::SRT_MAGIC;
     resp.syn_cookie = syn_cookie;
@@ -175,7 +175,7 @@ where
     M: MultiSink,
 {
     tracing::trace!("CONCLUSION");
-    debug_assert_eq!(packet.handshake_type, HandshakeType::Conclusion);
+    debug_assert!(packet.handshake_type.is_conclusion());
 
     srt_assert!(packet.version, 5);
     srt_assert!(packet.encryption_field, 0);

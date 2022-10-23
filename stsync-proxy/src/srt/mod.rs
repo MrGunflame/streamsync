@@ -548,31 +548,97 @@ pub enum EncryptionField {
 // | 0x00000001 |   INDUCTION    |
 // +------------+----------------+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub enum HandshakeType {
-    #[default]
-    Induction,
-    Wavehand,
-    Conclusion,
-    Agreement,
-    Done,
+pub struct HandshakeType(u32);
+
+impl HandshakeType {
+    pub const DONE: Self = Self(0xFFFFFFFD);
+    pub const AGREEMENT: Self = Self(0xFFFFFFFE);
+    pub const CONCLUSION: Self = Self(0xFFFFFFFF);
+    pub const WAVEHAND: Self = Self(0x00000000);
+    pub const INDUCTION: Self = Self(0x00000001);
+
+    // REJECTION CODES (https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3)
+    pub const REJ_UNKNOWN: Self = Self(1000);
+    pub const REJ_SYSTEM: Self = Self(1001);
+    pub const REJ_PEER: Self = Self(1002);
+    pub const REJ_RESOURCE: Self = Self(1003);
+    pub const REJ_ROGUE: Self = Self(1004);
+    pub const REJ_BACKLOG: Self = Self(1005);
+    pub const REJ_IPE: Self = Self(1006);
+    pub const REJ_CLOSE: Self = Self(1007);
+    pub const REJ_VERSION: Self = Self(1008);
+    pub const REJ_RDVCOOKIE: Self = Self(1009);
+    pub const REJ_BADSECRET: Self = Self(1010);
+    pub const REJ_INSECURE: Self = Self(1011);
+    pub const REJ_MESSAGEAPI: Self = Self(1012);
+    pub const REJ_CONGESTION: Self = Self(1013);
+    pub const REJ_FILTER: Self = Self(1014);
+    pub const REJ_GROUP: Self = Self(1015);
+
+    pub fn to_u32(self) -> u32 {
+        self.0
+    }
+
+    pub fn from_u32(n: u32) -> Option<Self> {
+        match n {
+            n if n == Self::DONE.0 => Some(Self::DONE),
+            n if n == Self::AGREEMENT.0 => Some(Self::AGREEMENT),
+            n if n == Self::CONCLUSION.0 => Some(Self::CONCLUSION),
+            n if n == Self::WAVEHAND.0 => Some(Self::WAVEHAND),
+            n if n == Self::INDUCTION.0 => Some(Self::INDUCTION),
+            n if n == Self::REJ_UNKNOWN.0 => Some(Self::REJ_UNKNOWN),
+            n if n == Self::REJ_SYSTEM.0 => Some(Self::REJ_SYSTEM),
+            n if n == Self::REJ_PEER.0 => Some(Self::REJ_PEER),
+            n if n == Self::REJ_RESOURCE.0 => Some(Self::REJ_RESOURCE),
+            n if n == Self::REJ_ROGUE.0 => Some(Self::REJ_ROGUE),
+            n if n == Self::REJ_BACKLOG.0 => Some(Self::REJ_BACKLOG),
+            n if n == Self::REJ_IPE.0 => Some(Self::REJ_IPE),
+            n if n == Self::REJ_CLOSE.0 => Some(Self::REJ_CLOSE),
+            n if n == Self::REJ_VERSION.0 => Some(Self::REJ_VERSION),
+            n if n == Self::REJ_RDVCOOKIE.0 => Some(Self::REJ_RDVCOOKIE),
+            n if n == Self::REJ_BADSECRET.0 => Some(Self::REJ_BADSECRET),
+            n if n == Self::REJ_INSECURE.0 => Some(Self::REJ_INSECURE),
+            n if n == Self::REJ_MESSAGEAPI.0 => Some(Self::REJ_MESSAGEAPI),
+            n if n == Self::REJ_CONGESTION.0 => Some(Self::REJ_CONGESTION),
+            n if n == Self::REJ_FILTER.0 => Some(Self::REJ_FILTER),
+            n if n == Self::REJ_GROUP.0 => Some(Self::REJ_GROUP),
+            _ => None,
+        }
+    }
+
+    pub fn is_done(self) -> bool {
+        self == Self::DONE
+    }
+
+    pub fn is_agreement(self) -> bool {
+        self == Self::AGREEMENT
+    }
+
+    pub fn is_conclusion(self) -> bool {
+        self == Self::CONCLUSION
+    }
+
+    pub fn is_wavehand(self) -> bool {
+        self == Self::WAVEHAND
+    }
+
+    pub fn is_induction(self) -> bool {
+        self == Self::INDUCTION
+    }
+
+    pub fn is_rejection(self) -> bool {
+        self.0 >= Self::REJ_UNKNOWN.0 && self.0 <= Self::REJ_GROUP.0
+    }
 }
 
 impl Encode for HandshakeType {
     type Error = Error;
 
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
-        let val: u32 = match self {
-            Self::Done => 0xFFFFFFFD,
-            Self::Agreement => 0xFFFFFFFE,
-            Self::Conclusion => 0xFFFFFFFF,
-            Self::Wavehand => 0x00000000,
-            Self::Induction => 0x00000001,
-        };
-
-        writer.write_all(&val.to_be_bytes())?;
+        self.0.encode(writer)?;
         Ok(())
     }
 }
@@ -584,13 +650,10 @@ impl Decode for HandshakeType {
     where
         R: Read,
     {
-        match u32::decode(reader).unwrap() {
-            0xFFFFFFFD => Ok(Self::Done),
-            0xFFFFFFFE => Ok(Self::Agreement),
-            0xFFFFFFFF => Ok(Self::Conclusion),
-            0x00000000 => Ok(Self::Wavehand),
-            0x00000001 => Ok(Self::Induction),
-            val => Err(Error::InvalidHandshakeType(val)),
+        let n = u32::decode(reader)?;
+        match Self::from_u32(n) {
+            Some(this) => Ok(this),
+            None => Err(Error::InvalidHandshakeType(n)),
         }
     }
 }

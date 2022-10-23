@@ -1,6 +1,5 @@
 use sink::{FileMultiSink, LiveMultiSink};
 use srt::config::Config;
-use tokio::net::UdpSocket;
 
 mod proto;
 mod rtcp;
@@ -13,7 +12,7 @@ mod srt;
 async fn main() {
     pretty_env_logger::init();
 
-    srt::server::serve("0.0.0.0:9999", FileMultiSink, Config::default())
+    srt::server::serve("[::]:9999", FileMultiSink, Config::default())
         .await
         .unwrap();
 }

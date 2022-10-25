@@ -15,7 +15,7 @@ use stsync_gst::{run_pipeline, GstElement};
 
 pub struct SessionId(pub u64);
 
-pub trait MultiSink: Clone + Send + Sync {
+pub trait MultiSink: Clone + Send + Sync + 'static {
     type Sink: futures::Sink<Vec<u8>> + Send + Sync + Unpin;
 
     fn attach(&self, id: SessionId) -> Self::Sink;

@@ -40,7 +40,7 @@ impl Counter {
         self.add(1);
     }
 
-    fn load(&self) -> usize {
+    pub fn load(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 }

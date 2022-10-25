@@ -1337,7 +1337,7 @@ impl ExtensionContent {
                 match len % 3 {
                     0 => len,
                     1 => len + 2,
-                    2 => len + 3,
+                    2 => len + 1,
                     _ => unreachable!(),
                 }
             }

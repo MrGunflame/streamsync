@@ -184,7 +184,16 @@ impl Encode for LightAck {
     }
 }
 
-pub struct SmallAck {}
+#[derive(Clone, Debug, Default)]
+pub struct SmallAck {
+    pub header: Header,
+    pub last_acknowledged_packet_sequence_number: u32,
+    pub rtt: u32,
+    pub rtt_variance: u32,
+    pub avaliable_buffer_size: u32,
+}
+
+impl SmallAck {}
 
 ///     0                   1                   2                   3
 /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -255,6 +264,13 @@ impl Nak {
 
     pub fn set_lost_packet_sequence_number(&mut self, n: u32) {
         self.lost_packet_sequence_numbers = SequenceNumbers::new_single(n);
+    }
+
+    pub fn set_lost_packet_sequence_numbers<T>(&mut self, seq: T)
+    where
+        T: Into<SequenceNumbers>,
+    {
+        self.lost_packet_sequence_numbers = seq.into();
     }
 }
 
@@ -430,7 +446,7 @@ where
     A: Into<U32>,
 {
     fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
-        let mut vec: Vec<U32> = iter.into_iter().map(|item| item.into()).collect();
+        let vec: Vec<U32> = iter.into_iter().map(|item| item.into()).collect();
 
         if vec.len() == 1 {
             Self::new_single(vec[0])
@@ -443,5 +459,15 @@ where
 impl Default for SequenceNumbers {
     fn default() -> Self {
         Self::Single(Bits(U32(0)))
+    }
+}
+
+impl<T, A> From<T> for SequenceNumbers
+where
+    T: IntoIterator<Item = A>,
+    A: Into<U32>,
+{
+    fn from(iter: T) -> Self {
+        Self::from_iter(iter.into_iter())
     }
 }

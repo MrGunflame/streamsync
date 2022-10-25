@@ -11,7 +11,7 @@ use futures::sink::Feed;
 use futures::{Sink, SinkExt};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as TkMutex, Notify};
 
 use crate::sink::{MultiSink, SessionId};
 
@@ -90,17 +90,27 @@ where
         self.inner.lock().unwrap().get(conn.borrow()).cloned()
     }
 
-    pub fn clean(&self) -> usize {
-        let mut inner = self.inner.lock().unwrap();
-        let mut num_removed = 0;
-        inner.retain(|conn| {
-            if conn.last_packet_time.lock().unwrap().elapsed() > Duration::from_secs(15) {
-                num_removed += 1;
-                false
-            } else {
-                true
-            }
-        });
+    pub async fn clean(&self) -> usize {
+        let removed = {
+            let mut inner = self.inner.lock().unwrap();
+
+            let mut removed = Vec::new();
+            inner.retain(|conn| {
+                if conn.last_packet_time.lock().unwrap().elapsed() > Duration::from_secs(15) {
+                    removed.push(conn.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+
+            removed
+        };
+
+        let num_removed = removed.len();
+        for conn in removed.into_iter() {
+            conn.close().await;
+        }
 
         num_removed
     }
@@ -153,17 +163,20 @@ where
     pub syn_cookie: AtomicU32,
 
     pub inflight_acks: Mutex<AckQueue>,
+    pub lost_packets: Mutex<Vec<u32>>,
 
     /// Total packets/bytes received from the peer.
     // TODO: Merge together into single cell
     pub packets_recv: AtomicU32,
     pub bytes_recv: AtomicU32,
 
-    pub sink: Mutex<Option<OutputSink<S>>>,
+    pub sink: TkMutex<Option<OutputSink<S>>>,
     /// Relative timestamp of the last transmitted message. We drop the connection when this
     /// reaches 5s.
     pub last_packet_time: Mutex<Instant>,
     pub metrics: ConnectionMetrics,
+
+    pub shutdown: Notify,
 }
 
 impl<S> Connection<S>
@@ -191,11 +204,13 @@ where
             state: ConnectionState::new(),
             syn_cookie: AtomicU32::new(0),
             inflight_acks: Mutex::new(AckQueue::new()),
-            sink: Mutex::default(),
+            sink: TkMutex::default(),
             last_packet_time: Mutex::new(Instant::now()),
             packets_recv: AtomicU32::new(0),
             bytes_recv: AtomicU32::new(0),
             metrics: ConnectionMetrics::new(),
+            lost_packets: Mutex::default(),
+            shutdown: Notify::new(),
         }
     }
 
@@ -215,22 +230,22 @@ where
     where
         M: MultiSink<Sink = S>,
     {
-        let mut sink = self.sink.lock().unwrap();
-
-        let seqnum = packet.packet_sequence_number();
+        let mut sink = self.sink.lock().await;
 
         match &mut *sink {
             Some(sink) => sink.push(packet).await,
             None => {
                 let new = state.sink.attach(SessionId(self.server_socket_id.0 as u64));
-                *sink = Some(OutputSink::new(self, new, seqnum));
+                *sink = Some(OutputSink::new(self, new));
                 sink.as_mut().unwrap().push(packet).await
             }
         }
     }
 
     pub async fn close(&self) {
-        let mut sink = self.sink.lock().unwrap();
+        self.shutdown.notify_one();
+
+        let mut sink = self.sink.lock().await;
         if let Some(sink) = &mut *sink {
             let _ = sink.close().await;
         }

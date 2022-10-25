@@ -12,7 +12,7 @@ where
     S: Sink<Vec<u8>>,
 {
     /// Sequence number of the next expected segment.
-    next_seqnum: u32,
+    next_msgnum: u32,
     sink: S,
     queue: BufferQueue,
     skip_counter: u8,
@@ -27,9 +27,9 @@ impl<S> OutputSink<S>
 where
     S: Sink<Vec<u8>> + Unpin,
 {
-    pub fn new(conn: &Connection<S>, sink: S, seqnum: u32) -> Self {
+    pub fn new(conn: &Connection<S>, sink: S) -> Self {
         Self {
-            next_seqnum: seqnum,
+            next_msgnum: 0,
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
@@ -38,26 +38,26 @@ where
     }
 
     pub async fn push(&mut self, packet: DataPacket) -> Result<(), S::Error> {
-        let seqnum = packet.packet_sequence_number();
+        let msgnum = packet.message_number();
 
         // We already assumed the packets to be lost and skipped ahead.
-        if self.next_seqnum > seqnum {
-            tracing::trace!("Segment {} received too late", seqnum);
+        if self.next_msgnum > msgnum {
+            tracing::trace!("Segment {} received too late", msgnum);
             return Ok(());
         }
 
-        if self.next_seqnum == seqnum {
-            tracing::trace!("Segment {} is in order", seqnum);
+        if self.next_msgnum == msgnum {
+            tracing::trace!("Segment {} is in order", msgnum);
             self.skip_counter = self.skip_counter.saturating_sub(1);
 
             self.sink.feed(packet.data).await?;
-            self.next_seqnum += 1;
+            self.next_msgnum += 1;
 
             loop {
-                match self.queue.remove(self.next_seqnum) {
+                match self.queue.remove(self.next_msgnum) {
                     Some(buf) => {
                         self.sink.feed(buf).await?;
-                        self.next_seqnum += 1;
+                        self.next_msgnum += 1;
                     }
                     None => break,
                 }
@@ -67,24 +67,24 @@ where
 
             tracing::debug!(
                 "Segment {} is out of order (missing {}) (skip ahead in {})",
-                seqnum,
-                self.next_seqnum,
+                msgnum,
+                self.next_msgnum,
                 self.skip_counter,
             );
 
-            self.queue.insert(seqnum, packet.data);
+            self.queue.insert(msgnum, packet.data);
 
             if self.skip_counter >= 20 {
                 self.skip_counter = 0;
                 tracing::trace!("Skip ahead (lost 20 segments)");
                 let mut num_catched = 0;
-                while self.next_seqnum <= seqnum {
-                    if let Some(buf) = self.queue.remove(self.next_seqnum) {
+                while self.next_msgnum <= msgnum {
+                    if let Some(buf) = self.queue.remove(self.next_msgnum) {
                         self.sink.feed(buf).await?;
                         num_catched += 1;
                     }
 
-                    self.next_seqnum += 1;
+                    self.next_msgnum += 1;
                 }
 
                 tracing::trace!("Recovered {} segments", num_catched);

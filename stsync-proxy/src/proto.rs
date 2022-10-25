@@ -276,6 +276,12 @@ macro_rules! uint_newtype {
                 }
             }
 
+            impl<'a> From<&'a $t> for $id {
+                fn from(src: &'a $t) -> Self {
+                    Self(*src)
+                }
+            }
+
             impl Encode for $id {
                 type Error = <$t as Encode>::Error;
 

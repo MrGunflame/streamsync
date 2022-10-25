@@ -2,14 +2,17 @@ use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io::{self, Write};
+use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use futures::{Sink, Stream, StreamExt};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
 use super::config::Config;
@@ -27,7 +30,11 @@ where
     A: ToSocketAddrs,
     S: MultiSink + 'static,
 {
-    let socket = UdpSocket::bind(addr).await?;
+    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_recv_buffer_size(500_000_000)?;
+    socket.bind(&SocketAddr::from_str("[::]:9999").unwrap().into())?;
+
+    let socket = UdpSocket::from_std(socket.into())?;
     tracing::info!("Listing on {}", socket.local_addr()?);
 
     let state = State::new(sink, config);
@@ -38,7 +45,7 @@ where
         loop {
             tokio::time::sleep(Duration::new(15, 0)).await;
             tracing::trace!("Tick cleanup");
-            let num_removed = state2.pool.clean();
+            let num_removed = state2.pool.clean().await;
             tracing::debug!(
                 "Purged {} connections ({} alive)",
                 num_removed,
@@ -122,8 +129,9 @@ where
     S: MultiSink,
 {
     let stream = SrtStream {
-        socket: &socket,
+        socket,
         addr,
+        _marker: &PhantomData,
     };
 
     // A destination socket id of 0 indicates a handshake request.
@@ -199,10 +207,11 @@ where
     Ok(())
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct SrtStream<'a> {
-    pub socket: &'a UdpSocket,
+    pub socket: Arc<UdpSocket>,
     pub addr: SocketAddr,
+    pub _marker: &'a PhantomData<u8>,
 }
 
 impl<'a> SrtStream<'a> {
@@ -217,6 +226,7 @@ impl<'a> SrtStream<'a> {
 }
 
 /// A SrtStream with an associated connection.
+#[derive(Clone)]
 pub struct SrtConnStream<'a, M>
 where
     M: MultiSink,
@@ -229,6 +239,10 @@ impl<'a, M> SrtConnStream<'a, M>
 where
     M: MultiSink,
 {
+    pub fn new(stream: SrtStream<'a>, conn: Arc<Connection<M::Sink>>) -> Self {
+        Self { stream, conn }
+    }
+
     pub async fn send<T>(&self, packet: T) -> Result<(), Error>
     where
         T: IsPacket,

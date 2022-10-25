@@ -1,5 +1,15 @@
-use crate::sink::MultiSink;
+use std::{
+    sync::{atomic::Ordering, Arc},
+    time::{Duration, Instant},
+};
 
+use futures::Sink;
+use tokio::net::UdpSocket;
+
+use crate::srt::{proto::Ack, server::SrtStream};
+use crate::{sink::MultiSink, srt::proto::Nak};
+
+use super::state::Connection;
 use super::{proto::AckAck, server::SrtConnStream, state::State, Error};
 
 pub async fn ackack<S>(
@@ -32,5 +42,74 @@ where
         None => (),
     }
 
+    Ok(())
+}
+
+pub async fn send_ack<M>(stream: &SrtConnStream<'_, M>) -> Result<(), Error>
+where
+    M: MultiSink,
+{
+    tracing::trace!("Sending ACK");
+
+    // Send a NAK with all lost seqnums instead.
+    // {
+    //     let packet = {
+    //         let lost_packets = stream.conn.lost_packets.lock().unwrap();
+    //         if !lost_packets.is_empty() {
+    //             Some(
+    //                 Nak::builder()
+    //                     .lost_packet_sequence_numbers(&*lost_packets)
+    //                     .build(),
+    //             )
+    //         } else {
+    //             None
+    //         }
+    //     };
+
+    //     if let Some(packet) = packet {
+    //         stream.send(packet).await?;
+    //         return Ok(());
+    //     }
+    // }
+
+    let ack = {
+        let mut inflight_acks = stream.conn.inflight_acks.lock().unwrap();
+
+        let (rtt, rtt_variance) = stream.conn.rtt.load();
+
+        let timespan = stream.conn.start_time.elapsed().as_secs().max(1) as usize;
+        let packet_recv_rate = stream.conn.metrics.packets_recv.load() / timespan;
+        let bytes_recv_rate = stream.conn.metrics.bytes_recv.load() / timespan;
+
+        let client_seqnum = stream.conn.client_sequence_number.load(Ordering::Acquire);
+
+        let mut ack = Ack::builder()
+            .last_acknowledged_packet_sequence_number(client_seqnum)
+            .rtt(rtt)
+            .rtt_variance(rtt_variance)
+            .avaliable_buffer_size(5000)
+            .packets_receiving_rate(packet_recv_rate as u32)
+            .estimated_link_capacity(5000)
+            .receiving_rate(bytes_recv_rate as u32)
+            .build();
+
+        let server_sequence_number = stream
+            .conn
+            .server_sequence_number
+            .fetch_add(1, Ordering::AcqRel);
+
+        ack.set_acknowledgement_number(server_sequence_number);
+
+        let now = Instant::now();
+
+        ack.header.destination_socket_id = stream.conn.client_socket_id.0;
+        ack.header.timestamp = stream.conn.timestamp();
+
+        inflight_acks.push_back(server_sequence_number, now);
+
+        ack
+    };
+
+    stream.send(ack).await?;
     Ok(())
 }

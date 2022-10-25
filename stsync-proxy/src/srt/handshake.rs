@@ -1,10 +1,15 @@
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
-use super::server::{SrtConnStream, SrtStream};
+use super::server::SrtStream;
 use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::sink::MultiSink;
-use crate::srt::state::{ConnectionId, ConnectionState, SocketId};
+use crate::srt::ack::send_ack;
+use crate::srt::server::SrtConnStream;
+use crate::srt::state::ConnectionState;
 use crate::srt::{ExtensionField, ExtensionType, HandshakeExtension};
 
 static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
@@ -20,79 +25,6 @@ macro_rules! srt_assert {
     };
 }
 
-/// Handles a new incoming handshake. This is the only packet that should be handled on
-/// unknown connection streams.
-pub async fn handshake_new<S>(
-    packet: HandshakePacket,
-    stream: SrtStream<'_>,
-    state: State<S>,
-) -> Result<(), Error>
-where
-    S: MultiSink,
-{
-    tracing::trace!("INDUCTION");
-
-    // Remove the client if it already exists.
-    state.pool.remove(ConnectionId {
-        addr: stream.addr,
-        socket_id: packet.srt_socket_id.into(),
-    });
-
-    // Check if the handshake induction is valid.
-    srt_assert!(packet.version, 4);
-    srt_assert!(packet.encryption_field, 0);
-    srt_assert!(packet.extension_field, ExtensionField::INDUCTION);
-    srt_assert!(packet.handshake_type, HandshakeType::INDUCTION);
-    srt_assert!(packet.syn_cookie, 0);
-
-    let client_socket_id = packet.srt_socket_id;
-    let server_socket_id = SRV_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
-
-    let client_seqnum = packet.initial_packet_sequence_number;
-    let server_seqnum = state.random();
-
-    let syn_cookie = state.random();
-
-    // Respond with our own induction.
-    // TODO: Advertise AES block size here
-    let mut resp = HandshakePacket::default();
-    resp.header.set_packet_type(PacketType::Control);
-    resp.header.timestamp = 0;
-    resp.header.destination_socket_id = client_socket_id;
-    // SRT magic
-    resp.version = 5;
-    resp.extension_field = ExtensionField::SRT_MAGIC;
-    resp.srt_socket_id = server_socket_id;
-    resp.handshake_type = HandshakeType::INDUCTION;
-    resp.syn_cookie = syn_cookie;
-
-    resp.initial_packet_sequence_number = server_seqnum;
-    // Ethernet frame size
-    resp.maximum_transmission_unit_size = 1500;
-    resp.maximum_flow_window_size = 8192;
-    // TODO: Correct IP handling
-    resp.peer_ip_address = u32::from_be_bytes([127, 0, 0, 1]) as u128;
-
-    // Mark the connection as alive.
-    let mut conn = Connection::new(stream.addr, server_socket_id, client_socket_id);
-    conn.client_sequence_number = AtomicU32::new(client_seqnum);
-    conn.server_sequence_number = AtomicU32::new(server_seqnum);
-    conn.syn_cookie = AtomicU32::new(syn_cookie);
-    conn.state.set(ConnectionState::INDUCTION);
-
-    tracing::debug!(
-        "Adding new client with state {:?} SYN {:?}",
-        conn.state,
-        conn.syn_cookie
-    );
-    state.pool.insert(conn);
-
-    stream.send(resp).await?;
-
-    tracing::debug!("Adding new client with state INDUCTION");
-    Ok(())
-}
-
 pub async fn handshake<S>(
     packet: HandshakePacket,
     stream: SrtStream<'_>,
@@ -101,8 +33,6 @@ pub async fn handshake<S>(
 where
     S: MultiSink,
 {
-    tracing::info!("{:?}", packet);
-
     match packet.handshake_type {
         HandshakeType::INDUCTION => handshake_induction(packet, stream, state).await,
         HandshakeType::CONCLUSION => handshake_conclusion(packet, stream, state).await,
@@ -219,12 +149,41 @@ where
         tracing::info!("StreamId ext: {:?}", ext);
     }
 
-    tracing::info!("RESP {:?}", packet);
-
     stream.send(packet).await?;
 
     tracing::debug!("Connection from {} INDUCTION -> DONE", stream.addr);
     conn.state.set(ConnectionState::DONE);
+
+    let socket = stream.socket;
+    let addr = stream.addr;
+    tokio::task::spawn(async move {
+        let stream = SrtConnStream::<M>::new(
+            SrtStream {
+                socket,
+                addr,
+                _marker: &PhantomData,
+            },
+            conn,
+        );
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            let fut = send_ack(&stream);
+            let shutdown = stream.conn.shutdown.notified();
+
+            tokio::select! {
+                res = fut => {
+                    if let Err(err) = res {
+                        tracing::debug!("Failed to send ACK: {}", err);
+                    }
+                }
+                _ = shutdown => {
+                    break;
+                }
+            }
+        }
+    });
 
     Ok(())
 }

@@ -3,7 +3,7 @@ use crate::{
     srt::{ControlPacketType, PacketType},
 };
 
-use super::{Ack, AckAck, Keepalive, LightAck, Nak, Shutdown};
+use super::{Ack, AckAck, Keepalive, LightAck, Nak, SequenceNumbers, Shutdown, SmallAck};
 
 #[derive(Clone, Debug)]
 pub struct KeepaliveBuilder(Keepalive);
@@ -129,6 +129,42 @@ impl Default for LightAckBuilder {
 }
 
 #[derive(Clone, Debug)]
+pub struct SmallAckBuilder(SmallAck);
+
+impl SmallAckBuilder {
+    pub fn new() -> Self {
+        let mut packet = SmallAck::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet
+            .header
+            .as_control()
+            .unwrap()
+            .set_control_type(ControlPacketType::Ack);
+
+        Self(packet)
+    }
+
+    pub const fn last_acknowledged_packet_sequence_number(mut self, n: u32) -> Self {
+        self.0.last_acknowledged_packet_sequence_number = n;
+        self
+    }
+
+    pub const fn rtt(mut self, n: u32) -> Self {
+        self.0.rtt = n;
+        self
+    }
+
+    pub const fn rtt_variance(mut self, n: u32) -> Self {
+        self.0.rtt_variance = n;
+        self
+    }
+
+    pub const fn build(self) -> SmallAck {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AckAckBuilder(AckAck);
 
 impl AckAckBuilder {
@@ -172,6 +208,14 @@ impl NakBuilder {
 
     pub fn lost_packet_sequence_number(mut self, n: u32) -> Self {
         self.0.set_lost_packet_sequence_number(n);
+        self
+    }
+
+    pub fn lost_packet_sequence_numbers<T>(mut self, seq: T) -> Self
+    where
+        T: Into<SequenceNumbers>,
+    {
+        self.0.set_lost_packet_sequence_numbers(seq);
         self
     }
 

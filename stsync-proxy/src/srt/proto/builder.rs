@@ -1,5 +1,5 @@
 use crate::{
-    proto::{Bits, U32},
+    proto::{Bits, Zeroable, U32},
     srt::{ControlPacketType, PacketType},
 };
 
@@ -169,7 +169,7 @@ pub struct AckAckBuilder(AckAck);
 
 impl AckAckBuilder {
     pub fn new() -> Self {
-        let mut packet = AckAck::default();
+        let mut packet = AckAck::zeroed();
         packet.header.set_packet_type(PacketType::Control);
         packet
             .header

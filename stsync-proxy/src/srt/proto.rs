@@ -3,7 +3,7 @@ pub mod builder;
 use std::convert::Infallible;
 use std::io::{self, Read, Write};
 
-use crate::proto::{Bits, Decode, Encode, U32};
+use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
 use self::builder::{
     AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder, ShutdownBuilder,
@@ -206,7 +206,7 @@ impl SmallAck {}
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// |                     Destination Socket ID                     |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AckAck {
     pub header: Header,
 }
@@ -245,6 +245,8 @@ impl IsPacket for AckAck {
         })
     }
 }
+
+unsafe impl Zeroable for AckAck {}
 
 #[derive(Clone, Debug, Default)]
 pub struct Nak {

@@ -1,23 +1,21 @@
 use std::sync::atomic::Ordering;
 
-use crate::sink::MultiSink;
+use crate::session::SessionManager;
 
 use super::{server::SrtConnStream, state::State, DataPacket, Error};
 
 pub async fn handle_data<S>(
     packet: DataPacket,
-    stream: SrtConnStream<'_, S>,
+    stream: SrtConnStream<'_>,
     state: State<S>,
 ) -> Result<(), Error>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
     let seqnum = packet.packet_sequence_number();
     tracing::debug!("SEQNUM {}", seqnum);
 
-    if let Err(err) = stream.conn.write_sink(&state, packet).await {
-        tracing::error!("Failed to write to sink");
-    }
+    stream.conn.send(packet).await;
 
     let client_sequence_number = stream.conn.client_sequence_number.load(Ordering::Acquire);
     // if client_sequence_number != seqnum {

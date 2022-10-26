@@ -18,6 +18,7 @@ use tokio::net::{ToSocketAddrs, UdpSocket};
 use super::config::Config;
 use super::state::{Connection, SocketId, State};
 use crate::proto::{Bits, Decode, Encode};
+use crate::session::SessionManager;
 use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::state::ConnectionId;
@@ -25,10 +26,10 @@ use crate::srt::{ControlPacketType, PacketType};
 
 use super::{Error, IsPacket, Packet};
 
-pub async fn serve<A, S>(addr: A, sink: S, config: Config) -> Result<(), io::Error>
+pub async fn serve<A, S>(addr: A, session_manager: S, config: Config) -> Result<(), io::Error>
 where
     A: ToSocketAddrs,
-    S: MultiSink + 'static,
+    S: SessionManager + 'static,
 {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_recv_buffer_size(500_000_000)?;
@@ -37,7 +38,7 @@ where
     let socket = UdpSocket::from_std(socket.into())?;
     tracing::info!("Listing on {}", socket.local_addr()?);
 
-    let state = State::new(sink, config);
+    let state = State::new(session_manager, config);
 
     // Clean regularly
     let state2 = state.clone();
@@ -126,7 +127,7 @@ async fn handle_message<S>(
     state: State<S>,
 ) -> Result<(), Error>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
     let stream = SrtStream {
         socket,
@@ -211,7 +212,7 @@ where
 pub struct SrtStream<'a> {
     pub socket: Arc<UdpSocket>,
     pub addr: SocketAddr,
-    pub _marker: &'a PhantomData<u8>,
+    pub _marker: &'a PhantomData<()>,
 }
 
 impl<'a> SrtStream<'a> {
@@ -227,19 +228,13 @@ impl<'a> SrtStream<'a> {
 
 /// A SrtStream with an associated connection.
 #[derive(Clone)]
-pub struct SrtConnStream<'a, M>
-where
-    M: MultiSink,
-{
+pub struct SrtConnStream<'a> {
     pub stream: SrtStream<'a>,
-    pub conn: Arc<Connection<M::Sink>>,
+    pub conn: Arc<Connection>,
 }
 
-impl<'a, M> SrtConnStream<'a, M>
-where
-    M: MultiSink,
-{
-    pub fn new(stream: SrtStream<'a>, conn: Arc<Connection<M::Sink>>) -> Self {
+impl<'a> SrtConnStream<'a> {
+    pub fn new(stream: SrtStream<'a>, conn: Arc<Connection>) -> Self {
         Self { stream, conn }
     }
 
@@ -258,19 +253,13 @@ where
     }
 }
 
-async fn keepalive<M>(_packet: Keepalive, stream: SrtConnStream<'_, M>) -> Result<(), Error>
-where
-    M: MultiSink,
-{
+async fn keepalive(_packet: Keepalive, stream: SrtConnStream<'_>) -> Result<(), Error> {
     let resp = Keepalive::builder().build();
     stream.send(resp).await?;
     Ok(())
 }
 
-pub fn close_metrics<S>(conn: &Connection<S>)
-where
-    S: Sink<Vec<u8>>,
-{
+pub fn close_metrics(conn: &Connection) {
     tracing::info!("Connection to {} closed", conn.id.addr);
     tracing::info!(
         "Connection metrics:\n

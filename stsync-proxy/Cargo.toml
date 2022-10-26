@@ -13,6 +13,8 @@ thiserror = "1.0.37"
 tokio = { version = "1.21.2", features = ["full"] }
 tracing ={ version = "0.1.37", features = ["log-always"] }
 socket2 = "0.4.7"
+snowflaked = { version = "0.1.5", features = ["sync"] }
+bytes = "1.2.1"
 
 [profile.release]
 opt-level = 3

@@ -1,43 +1,50 @@
 //! Output sinks
 use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Weak;
+use std::task::{Context, Poll};
 
+use bytes::Bytes;
 use futures::{Sink, SinkExt};
+
+use crate::session::{LiveSink, SessionManager};
 
 use super::state::Connection;
 use super::DataPacket;
 
+// TODO: OutputSink should implement futures::Sink instead of a "push" method.
 #[derive(Debug)]
 pub struct OutputSink<S>
 where
-    S: Sink<Vec<u8>>,
+    S: SessionManager,
 {
     /// Sequence number of the next expected segment.
     next_msgnum: u32,
-    sink: S,
+    sink: LiveSink<S::Sink>,
     queue: BufferQueue,
     skip_counter: u8,
 
-    /// Reference to the connection owning this sink. The connection is always guaranteed to
-    /// outlive the sink it owns. Since [`Connection`] usually comes wrapped in an Arc, it must
-    /// not dereferenced mutably.
-    conn: *const Connection<S>,
+    conn: Weak<Connection>,
 }
 
 impl<S> OutputSink<S>
 where
-    S: Sink<Vec<u8>> + Unpin,
+    S: SessionManager,
 {
-    pub fn new(conn: &Connection<S>, sink: S) -> Self {
+    pub fn new(conn: Weak<Connection>, sink: LiveSink<S::Sink>) -> Self {
         Self {
-            next_msgnum: 0,
+            next_msgnum: 1,
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
-            conn: conn as *const _,
+            conn,
         }
     }
 
-    pub async fn push(&mut self, packet: DataPacket) -> Result<(), S::Error> {
+    pub async fn push(
+        &mut self,
+        packet: DataPacket,
+    ) -> Result<(), <S::Sink as Sink<Bytes>>::Error> {
         let msgnum = packet.message_number();
 
         // We already assumed the packets to be lost and skipped ahead.
@@ -50,13 +57,13 @@ where
             tracing::trace!("Segment {} is in order", msgnum);
             self.skip_counter = self.skip_counter.saturating_sub(1);
 
-            self.sink.feed(packet.data).await?;
+            self.sink.feed(packet.data.into()).await?;
             self.next_msgnum += 1;
 
             loop {
                 match self.queue.remove(self.next_msgnum) {
                     Some(buf) => {
-                        self.sink.feed(buf).await?;
+                        self.sink.feed(buf.into()).await?;
                         self.next_msgnum += 1;
                     }
                     None => break,
@@ -75,32 +82,30 @@ where
             self.queue.insert(msgnum, packet.data);
 
             if self.skip_counter >= 20 {
-                self.skip_counter = 0;
-                tracing::trace!("Skip ahead (lost 20 segments)");
-                let mut num_catched = 0;
+                tracing::trace!("Skip ahead (20 segments)");
                 while self.next_msgnum <= msgnum {
                     if let Some(buf) = self.queue.remove(self.next_msgnum) {
-                        self.sink.feed(buf).await?;
-                        num_catched += 1;
+                        self.sink.feed(buf.into()).await?;
+                        self.skip_counter -= 1;
                     }
 
                     self.next_msgnum += 1;
                 }
 
-                tracing::trace!("Recovered {} segments", num_catched);
+                tracing::trace!("Lost {} segments", self.skip_counter);
 
-                // SAFETY: The connection is owning this sink. See struct def for details.
-                unsafe {
-                    let conn = &*self.conn;
-                    conn.metrics.packets_dropped.add(20 - num_catched);
+                if let Some(conn) = self.conn.upgrade() {
+                    conn.metrics.packets_dropped.add(self.skip_counter as usize);
                 }
+
+                self.skip_counter = 0;
             }
         }
 
         Ok(())
     }
 
-    pub async fn close(&mut self) -> Result<(), S::Error> {
+    pub async fn close(&mut self) -> Result<(), <S::Sink as Sink<Bytes>>::Error> {
         tracing::debug!("Dropping {} bytes from queue", self.queue.size);
         self.queue.clear();
 
@@ -108,8 +113,8 @@ where
     }
 }
 
-unsafe impl<S> Send for OutputSink<S> where S: Sink<Vec<u8>> {}
-unsafe impl<S> Sync for OutputSink<S> where S: Sink<Vec<u8>> {}
+unsafe impl<S> Send for OutputSink<S> where S: SessionManager + Send {}
+unsafe impl<S> Sync for OutputSink<S> where S: SessionManager + Sync {}
 
 #[derive(Clone, Debug, Default)]
 pub struct BufferQueue {

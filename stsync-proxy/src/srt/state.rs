@@ -1,76 +1,107 @@
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
-use std::num::Wrapping;
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::ops::Deref;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures::sink::Feed;
-use futures::{Sink, SinkExt};
+use bytes::Bytes;
+use futures::SinkExt;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use tokio::sync::{mpsc, Mutex as TkMutex, Notify};
+use tokio::sync::{mpsc, Notify};
 
-use crate::sink::{MultiSink, SessionId};
+use crate::proto::Encode;
+use crate::session::{ResourceId, SessionManager};
 
 use super::config::Config;
 use super::conn::AckQueue;
 use super::metrics::ConnectionMetrics;
 use super::sink::OutputSink;
-use super::{DataPacket, HandshakeType, Header};
+use super::{DataPacket, Header, IsPacket};
 
-#[derive(Clone)]
 pub struct State<S>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
-    pub config: Arc<Config>,
-    pub pool: Arc<ConnectionPool<S>>,
-    /// Pseudo RNG for all non-crypto randomness
-    // NOTE: This actually is a CSPRNG but it doesn't have to be.
-    pub prng: Arc<Mutex<OsRng>>,
-    pub sink: S,
+    inner: Arc<StateInner<S>>,
 }
 
 impl<S> State<S>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
-    pub fn new(sink: S, config: Config) -> Self {
+    pub fn new(session_manager: S, config: Config) -> Self {
         Self {
-            config: Arc::new(config),
-            pool: Arc::new(ConnectionPool::new()),
-            prng: Arc::default(),
-            sink,
+            inner: Arc::new(StateInner {
+                config: config,
+                pool: ConnectionPool::new(),
+                prng: Mutex::new(OsRng),
+                session_manager,
+            }),
         }
     }
+}
 
+impl<S> Clone for State<S>
+where
+    S: SessionManager,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<S> Deref for State<S>
+where
+    S: SessionManager,
+{
+    type Target = StateInner<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+#[derive(Debug)]
+pub struct StateInner<S>
+where
+    S: SessionManager,
+{
+    pub config: Config,
+    pub pool: ConnectionPool,
+    /// Pseudo RNG for all non-crypto randomness
+    // NOTE: This actually is a CSPRNG but it doesn't have to be.
+    pub prng: Mutex<OsRng>,
+    pub session_manager: S,
+}
+
+impl<S> StateInner<S>
+where
+    S: SessionManager,
+{
     pub fn random(&self) -> u32 {
         self.prng.lock().unwrap().next_u32()
     }
 }
 
 #[derive(Debug)]
-pub struct ConnectionPool<M>
-where
-    M: MultiSink,
-{
-    inner: Mutex<HashSet<Arc<Connection<M::Sink>>>>,
+pub struct ConnectionPool {
+    inner: Mutex<HashSet<Arc<Connection>>>,
 }
 
-impl<M> ConnectionPool<M>
-where
-    M: MultiSink,
-{
+impl ConnectionPool {
     pub fn new() -> Self {
         Self {
             inner: Mutex::default(),
         }
     }
 
-    pub fn insert(&self, conn: Connection<M::Sink>) {
+    pub fn insert(&self, conn: Connection) {
         let mut inner = self.inner.lock().unwrap();
         inner.insert(Arc::new(conn));
     }
@@ -83,7 +114,7 @@ where
         inner.remove(conn.borrow());
     }
 
-    pub fn get<T>(&self, conn: T) -> Option<Arc<Connection<M::Sink>>>
+    pub fn get<T>(&self, conn: T) -> Option<Arc<Connection>>
     where
         T: Borrow<ConnectionId>,
     {
@@ -109,7 +140,7 @@ where
 
         let num_removed = removed.len();
         for conn in removed.into_iter() {
-            conn.close().await;
+            conn.close();
         }
 
         num_removed
@@ -119,11 +150,7 @@ where
         self.inner.lock().unwrap().len()
     }
 
-    pub fn find_client_id(
-        &self,
-        addr: SocketAddr,
-        socket_id: u32,
-    ) -> Option<Arc<Connection<M::Sink>>> {
+    pub fn find_client_id(&self, addr: SocketAddr, socket_id: u32) -> Option<Arc<Connection>> {
         let inner = self.inner.lock().unwrap();
 
         for conn in &*inner {
@@ -143,10 +170,7 @@ where
 /// receiving a packet it must be matched against the `server_socket_id` to find an already
 /// existing stream. When sending a packet it must be sent to the `client_socket_id`.
 #[derive(Debug)]
-pub struct Connection<S>
-where
-    S: Sink<Vec<u8>>,
-{
+pub struct Connection {
     pub id: ConnectionId,
 
     /// Starting time of the connection. Used to calculate packet timestamps.
@@ -170,25 +194,28 @@ where
     pub packets_recv: AtomicU32,
     pub bytes_recv: AtomicU32,
 
-    pub sink: TkMutex<Option<OutputSink<S>>>,
+    pub mode: Mutex<ConnectionMode>,
     /// Relative timestamp of the last transmitted message. We drop the connection when this
     /// reaches 5s.
     pub last_packet_time: Mutex<Instant>,
     pub metrics: ConnectionMetrics,
 
     pub shutdown: Notify,
+
+    pub tx: mpsc::Sender<DataPacket>,
+    pub rx: Mutex<Option<mpsc::Receiver<DataPacket>>>,
 }
 
-impl<S> Connection<S>
-where
-    S: Sink<Vec<u8>> + Unpin,
-{
+impl Connection {
     pub fn new<T, U>(addr: SocketAddr, server_socket_id: T, client_socket_id: U) -> Self
     where
         T: Into<SocketId>,
         U: Into<SocketId>,
     {
         let server_socket_id = server_socket_id.into();
+
+        // This is about a 1.5MB backlog with an MTU of 1500.
+        let (tx, rx) = mpsc::channel(1024);
 
         Self {
             id: ConnectionId {
@@ -204,13 +231,15 @@ where
             state: ConnectionState::new(),
             syn_cookie: AtomicU32::new(0),
             inflight_acks: Mutex::new(AckQueue::new()),
-            sink: TkMutex::default(),
+            mode: Mutex::default(),
             last_packet_time: Mutex::new(Instant::now()),
             packets_recv: AtomicU32::new(0),
             bytes_recv: AtomicU32::new(0),
             metrics: ConnectionMetrics::new(),
             lost_packets: Mutex::default(),
             shutdown: Notify::new(),
+            tx,
+            rx: Mutex::new(Some(rx)),
         }
     }
 
@@ -226,78 +255,63 @@ where
         self.start_time + time
     }
 
-    pub async fn write_sink<M>(&self, state: &State<M>, packet: DataPacket) -> Result<(), S::Error>
-    where
-        M: MultiSink<Sink = S>,
-    {
-        let mut sink = self.sink.lock().await;
-
-        match &mut *sink {
-            Some(sink) => sink.push(packet).await,
-            None => {
-                let new = state.sink.attach(SessionId(self.server_socket_id.0 as u64));
-                *sink = Some(OutputSink::new(self, new));
-                sink.as_mut().unwrap().push(packet).await
-            }
-        }
+    pub async fn send(&self, packet: DataPacket) {
+        let _ = self.tx.send(packet).await;
     }
 
-    pub async fn close(&self) {
+    pub fn close(&self) {
         self.shutdown.notify_one();
+    }
 
-        let mut sink = self.sink.lock().await;
-        if let Some(sink) = &mut *sink {
-            let _ = sink.close().await;
-        }
+    pub fn spawn_publish<S>(self: &Arc<Self>, state: &State<S>, resource_id: Option<ResourceId>)
+    where
+        S: SessionManager,
+    {
+        let mut rx = self.rx.lock().unwrap().take().unwrap();
+
+        let sink = state.session_manager.publish(resource_id).unwrap();
+
+        let mut sink = OutputSink::<S>::new(Arc::downgrade(self), sink);
+
+        tokio::task::spawn(async move {
+            while let Some(packet) = rx.recv().await {
+                let _ = sink.push(packet).await;
+            }
+        });
     }
 }
 
-impl<'a, S> Borrow<ConnectionId> for Arc<Connection<S>>
-where
-    S: Sink<Vec<u8>>,
-{
+impl<'a> Borrow<ConnectionId> for Arc<Connection> {
     fn borrow(&self) -> &ConnectionId {
         &self.id
     }
 }
 
-impl<S> Borrow<ConnectionId> for Connection<S>
-where
-    S: Sink<Vec<u8>>,
-{
+impl Borrow<ConnectionId> for Connection {
     fn borrow(&self) -> &ConnectionId {
         &self.id
     }
 }
 
-impl<S> PartialEq<ConnectionId> for Connection<S>
-where
-    S: Sink<Vec<u8>>,
-{
+impl PartialEq<ConnectionId> for Connection {
     fn eq(&self, other: &ConnectionId) -> bool {
         self.id == *other
     }
 }
 
-impl<S> PartialEq for Connection<S>
-where
-    S: Sink<Vec<u8>>,
-{
+impl PartialEq for Connection {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<S> Hash for Connection<S>
-where
-    S: Sink<Vec<u8>>,
-{
+impl Hash for Connection {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl<S> Eq for Connection<S> where S: Sink<Vec<u8>> {}
+impl Eq for Connection {}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SocketId(pub u32);
@@ -333,6 +347,18 @@ impl ConnectionState {
     pub fn set(&self, state: u8) {
         self.inner.store(state, Ordering::Release);
     }
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ConnectionMode {
+    /// Connection mode is currently undefined. This state can only be present while a handshake
+    /// is currently being made.
+    #[default]
+    Undefined,
+    /// The caller (client) wants to receive data.
+    Request,
+    /// The caller (client) wants to send data.
+    Publish,
 }
 
 /// A single atomic cell containing both RTT and RTT variance.
@@ -390,26 +416,14 @@ pub struct ConnectionId {
     pub socket_id: SocketId,
 }
 
+pub enum Signal {
+    Data(DataPacket),
+    Ack(),
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, net::SocketAddr};
-
-    use crate::{
-        sink::NullSink,
-        srt::state::{Connection, ConnectionId, SocketId},
-    };
-
     use super::Rtt;
-
-    #[test]
-    fn test_set() {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 80));
-        let socket_id = SocketId(50);
-        let mut set = HashSet::<Connection<NullSink>>::new();
-        set.insert(Connection::new(addr, socket_id, 0));
-
-        assert!(set.get(&ConnectionId { addr, socket_id }).is_some());
-    }
 
     #[test]
     fn test_rtt() {

@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::ops::{Add, BitAnd, BitOr, Deref, DerefMut, Range, Shl, Shr, Sub};
 
 pub trait Decode: Sized {
@@ -88,6 +88,7 @@ impl Decode for Vec<u8> {
 
 /// A transparent wrapper around `T` used to directly manipulate bits.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct Bits<T>(pub T)
 where
     T: Bytes;
@@ -155,6 +156,8 @@ where
         Ok(Self(T::decode(reader)?))
     }
 }
+
+unsafe impl<T> Zeroable for Bits<T> where T: Bytes + Zeroable {}
 
 pub trait IntoBitRange {
     fn into_bit_range(self) -> Range<usize>;
@@ -303,6 +306,8 @@ macro_rules! uint_newtype {
                     Ok(Self(<$t>::decode(reader)?))
                 }
             }
+
+            unsafe impl Zeroable for $id {}
         )*
     };
 }
@@ -352,3 +357,34 @@ mod tests {
         assert_eq!(bits.bits(16..32), 0);
     }
 }
+
+/// A type that can safely be initialized with a full zero-bit pattern.
+///
+/// # Safety
+///
+/// When implementing `Zeroable` the same safety guarantees as [`MaybeUninit::zeroed`] must be
+/// given. This means the value must valid for a all zero-bit pattern.
+///
+/// In particular all integer types are `Zeroable`. In addition a struct that only contains fields
+/// that are `Zeroable` can also be safely marked as `Zeroable`.
+pub unsafe trait Zeroable: Sized {
+    /// Creates a new, zeroed value.
+    #[inline]
+    fn zeroed() -> Self {
+        // SAFETY: The implementor that a zeroed value is valid.
+        unsafe { MaybeUninit::zeroed().assume_init() }
+    }
+}
+
+unsafe impl Zeroable for u8 {}
+unsafe impl Zeroable for u16 {}
+unsafe impl Zeroable for u32 {}
+unsafe impl Zeroable for u64 {}
+
+unsafe impl Zeroable for i8 {}
+unsafe impl Zeroable for i16 {}
+unsafe impl Zeroable for i32 {}
+unsafe impl Zeroable for i64 {}
+
+unsafe impl Zeroable for f32 {}
+unsafe impl Zeroable for f64 {}

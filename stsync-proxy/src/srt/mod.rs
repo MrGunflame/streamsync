@@ -21,7 +21,7 @@ use std::{
     string::FromUtf8Error,
 };
 
-use crate::proto::{Bits, Decode, Encode, U32};
+use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -79,6 +79,10 @@ impl Header {
             PacketType::Data => Err(Error::InvalidPacketType(0)),
         }
     }
+
+    pub fn as_data_unchecked(&mut self) -> DataHeader<'_> {
+        DataHeader { header: self }
+    }
 }
 
 impl Encode for Header {
@@ -118,6 +122,8 @@ impl Decode for Header {
     }
 }
 
+unsafe impl Zeroable for Header {}
+
 #[derive(Clone, Debug)]
 pub struct DataPacket {
     header: Header,
@@ -125,6 +131,10 @@ pub struct DataPacket {
 }
 
 impl DataPacket {
+    pub fn header(&mut self) -> DataHeader<'_> {
+        self.header.as_data_unchecked()
+    }
+
     pub fn packet_sequence_number(&self) -> u32 {
         self.header.seg0.bits(1..32).0
     }
@@ -754,11 +764,31 @@ impl<'a> ControlHeader<'a> {
 
 /// Header for a data packet.
 pub struct DataHeader<'a> {
-    header: &'a Header,
+    header: &'a mut Header,
 }
 
 impl<'a> DataHeader<'a> {
-    // pub fn packet_position(&self) -> PacketPosition {}
+    pub fn packet_position(&self) -> PacketPosition {
+        match self.header.seg1.bits(0..2).0 {
+            0b10 => PacketPosition::First,
+            0b00 => PacketPosition::Middle,
+            0b01 => PacketPosition::Last,
+            0b11 => PacketPosition::Full,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn is_ordered(&self) -> bool {
+        self.header.seg1.bits(2) != 0
+    }
+
+    pub fn kk(&self) -> ! {
+        unimplemented!()
+    }
+
+    pub fn is_retransmitted(&self) -> bool {
+        self.header.seg1.bits(5) != 0
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1221,6 +1251,8 @@ impl Decode for KeyMaterialExtension {
     }
 }
 
+/// A UTF-8 string with up to 512 bytes.
+///
 #[derive(Clone, Debug, Default)]
 pub struct StreamIdExtension {
     pub content: String,

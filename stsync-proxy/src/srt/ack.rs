@@ -6,7 +6,10 @@ use std::{
 use futures::Sink;
 use tokio::net::UdpSocket;
 
-use crate::srt::{proto::Ack, server::SrtStream};
+use crate::{
+    session::SessionManager,
+    srt::{proto::Ack, server::SrtStream},
+};
 use crate::{sink::MultiSink, srt::proto::Nak};
 
 use super::state::Connection;
@@ -14,11 +17,11 @@ use super::{proto::AckAck, server::SrtConnStream, state::State, Error};
 
 pub async fn ackack<S>(
     packet: AckAck,
-    stream: SrtConnStream<'_, S>,
+    stream: SrtConnStream<'_>,
     state: State<S>,
 ) -> Result<(), Error>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
     // Calculate the RTT since the last ACK. We need to be careful not to underflow if the client
     // sends a bad timestamp.
@@ -45,10 +48,7 @@ where
     Ok(())
 }
 
-pub async fn send_ack<M>(stream: &SrtConnStream<'_, M>) -> Result<(), Error>
-where
-    M: MultiSink,
-{
+pub async fn send_ack(stream: &SrtConnStream<'_>) -> Result<(), Error> {
     tracing::trace!("Sending ACK");
 
     // Send a NAK with all lost seqnums instead.

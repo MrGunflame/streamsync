@@ -13,7 +13,10 @@ use stsync_gst::gst::{Buffer, Memory, Pipeline, Sample};
 use stsync_gst::gst_app::app_src::AppSrcSink;
 use stsync_gst::{run_pipeline, GstElement};
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SessionId(pub u64);
+
+impl SessionId {}
 
 pub trait MultiSink: Clone + Send + Sync + 'static {
     type Sink: futures::Sink<Vec<u8>> + Send + Sync + Unpin;

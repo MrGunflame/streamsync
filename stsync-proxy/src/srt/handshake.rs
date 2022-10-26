@@ -1,12 +1,13 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::mpsc;
 
 use super::server::SrtStream;
 use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
-use crate::sink::MultiSink;
+use crate::session::{ResourceId, SessionManager};
 use crate::srt::ack::send_ack;
 use crate::srt::server::SrtConnStream;
 use crate::srt::state::ConnectionState;
@@ -31,7 +32,7 @@ pub async fn handshake<S>(
     state: State<S>,
 ) -> Result<(), Error>
 where
-    S: MultiSink,
+    S: SessionManager,
 {
     match packet.handshake_type {
         HandshakeType::INDUCTION => handshake_induction(packet, stream, state).await,
@@ -43,13 +44,13 @@ where
     }
 }
 
-async fn handshake_induction<M>(
+async fn handshake_induction<S>(
     packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State<M>,
+    state: State<S>,
 ) -> Result<(), Error>
 where
-    M: MultiSink,
+    S: SessionManager,
 {
     tracing::trace!("INDUCTION");
     debug_assert!(packet.handshake_type.is_induction());
@@ -96,13 +97,13 @@ where
     Ok(())
 }
 
-async fn handshake_conclusion<M>(
+async fn handshake_conclusion<S>(
     mut packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State<M>,
+    state: State<S>,
 ) -> Result<(), Error>
 where
-    M: MultiSink,
+    S: SessionManager,
 {
     tracing::trace!("CONCLUSION");
     debug_assert!(packet.handshake_type.is_conclusion());
@@ -149,6 +150,10 @@ where
         tracing::info!("StreamId ext: {:?}", ext);
     }
 
+    // Setup data handler
+    // TODO: impl resource handling
+    conn.spawn_publish(&state, None);
+
     stream.send(packet).await?;
 
     tracing::debug!("Connection from {} INDUCTION -> DONE", stream.addr);
@@ -157,7 +162,7 @@ where
     let socket = stream.socket;
     let addr = stream.addr;
     tokio::task::spawn(async move {
-        let stream = SrtConnStream::<M>::new(
+        let stream = SrtConnStream::new(
             SrtStream {
                 socket,
                 addr,

@@ -14,11 +14,12 @@ mod sink;
 pub mod state;
 
 use std::{
+    collections::HashMap,
     convert::Infallible,
     fmt::Debug,
     io::{self, ErrorKind, Read, Write},
     ops::{BitAnd, BitOr},
-    string::FromUtf8Error,
+    str::FromStr,
 };
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
@@ -36,7 +37,7 @@ pub enum Error {
     #[error("invalid extension type {0}")]
     InvalidExtensionType(u16),
     #[error("{0}")]
-    FromUtf8Error(FromUtf8Error),
+    FromUtf8Error(std::str::Utf8Error),
     #[error("unsupported extension {0:?}")]
     UnsupportedExtension(ExtensionType),
 }
@@ -124,7 +125,7 @@ impl Decode for Header {
 
 unsafe impl Zeroable for Header {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DataPacket {
     header: Header,
     data: Vec<u8>,
@@ -768,6 +769,14 @@ pub struct DataHeader<'a> {
 }
 
 impl<'a> DataHeader<'a> {
+    pub fn packet_sequence_number(&self) -> u32 {
+        self.header.seg0.bits(1..32).0
+    }
+
+    pub fn set_packet_sequence_number(&mut self, n: u32) {
+        self.header.seg0.set_bits(1..32, n);
+    }
+
     pub fn packet_position(&self) -> PacketPosition {
         match self.header.seg1.bits(0..2).0 {
             0b10 => PacketPosition::First,
@@ -778,16 +787,47 @@ impl<'a> DataHeader<'a> {
         }
     }
 
+    pub fn set_packet_position(&mut self, pos: PacketPosition) {
+        let val = match pos {
+            PacketPosition::First => 0b10,
+            PacketPosition::Middle => 0b00,
+            PacketPosition::Last => 0b01,
+            PacketPosition::Full => 0b11,
+        };
+
+        self.header.seg1.set_bits(0..2, val);
+    }
+
     pub fn is_ordered(&self) -> bool {
         self.header.seg1.bits(2) != 0
+    }
+
+    pub fn set_ordered(&mut self, n: bool) {
+        self.header.seg1.set_bits(2, n as u32)
     }
 
     pub fn kk(&self) -> ! {
         unimplemented!()
     }
 
+    pub fn set_kk(&mut self) -> ! {
+        unimplemented!()
+    }
+
     pub fn is_retransmitted(&self) -> bool {
         self.header.seg1.bits(5) != 0
+    }
+
+    pub fn set_retransmitted(&mut self, n: bool) {
+        self.header.seg1.set_bits(5, n as u32);
+    }
+
+    pub fn message_number(&self) -> u32 {
+        self.header.seg1.bits(6..32).0
+    }
+
+    pub fn set_message_number(&mut self, n: u32) {
+        self.header.seg1.set_bits(6..32, n);
     }
 }
 
@@ -1253,9 +1293,16 @@ impl Decode for KeyMaterialExtension {
 
 /// A UTF-8 string with up to 512 bytes.
 ///
+/// The string is internally encoded little-endian words (u32).
 #[derive(Clone, Debug, Default)]
 pub struct StreamIdExtension {
     pub content: String,
+}
+
+impl StreamIdExtension {
+    pub fn parse(&self) -> Result<StandardStreamId, StandardStreamIdError> {
+        self.content.parse()
+    }
 }
 
 impl Encode for StreamIdExtension {
@@ -1277,12 +1324,95 @@ impl Decode for StreamIdExtension {
     where
         R: Read,
     {
-        let buf = Vec::decode(reader)?;
+        let mut vec = Vec::decode(reader)?;
+        let mut buf = &mut *vec;
 
-        match String::from_utf8(buf) {
-            Ok(content) => Ok(Self { content }),
-            Err(err) => Err(Error::FromUtf8Error(err)),
+        let mut string = String::with_capacity(buf.len());
+
+        while let Some(mut bytes) = buf.get_mut(0..4) {
+            // Remove any trailing filler.
+            while bytes.starts_with(&[0]) {
+                bytes = &mut bytes[1..];
+            }
+
+            bytes.reverse();
+            let chunk = match std::str::from_utf8(bytes) {
+                Ok(c) => c,
+                Err(err) => return Err(Error::FromUtf8Error(err)),
+            };
+
+            string.push_str(chunk);
+            buf = &mut buf[4..];
         }
+
+        Ok(Self { content: string })
+    }
+}
+
+#[derive(Debug)]
+pub enum StandardStreamIdError {
+    InvalidPrefix,
+    InvalidKeyValueFormat,
+}
+
+/// The default, recommended structure for the [`StreamIdExtension`].
+///
+/// Note that the nested block syntax is currently unsupported.
+///
+/// See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#appendix-B.1
+#[derive(Clone, Debug)]
+pub struct StandardStreamId {
+    map: HashMap<String, String>,
+}
+
+impl StandardStreamId {
+    pub fn user(&self) -> Option<&str> {
+        self.map.get("u").map(|s| s.as_str())
+    }
+
+    pub fn resource(&self) -> Option<&str> {
+        self.map.get("r").map(|s| s.as_str())
+    }
+
+    pub fn host(&self) -> Option<&str> {
+        self.map.get("h").map(|s| s.as_str())
+    }
+
+    pub fn session(&self) -> Option<&str> {
+        self.map.get("s").map(|s| s.as_str())
+    }
+
+    pub fn type_(&self) -> Option<&str> {
+        self.map.get("t").map(|s| s.as_str())
+    }
+
+    pub fn mode(&self) -> Option<&str> {
+        self.map.get("m").map(|s| s.as_str())
+    }
+}
+
+impl FromStr for StandardStreamId {
+    type Err = StandardStreamIdError;
+
+    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
+        // Strip the common prefix.
+        s = match s.strip_prefix("#!::") {
+            Some(s) => s,
+            None => return Err(StandardStreamIdError::InvalidPrefix),
+        };
+
+        let mut map = HashMap::new();
+
+        for pair in s.split(',') {
+            let (key, val) = match pair.split_once('=') {
+                Some((key, val)) => (key, val),
+                None => return Err(StandardStreamIdError::InvalidKeyValueFormat),
+            };
+
+            map.insert(key.to_owned(), val.to_owned());
+        }
+
+        Ok(Self { map })
     }
 }
 

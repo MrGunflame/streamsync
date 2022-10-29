@@ -1,5 +1,4 @@
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
-use sink::{FileMultiSink, LiveMultiSink};
 use srt::config::Config;
 
 mod proto;
@@ -7,7 +6,6 @@ mod rtcp;
 mod rtmp;
 mod rtp;
 mod session;
-pub mod sink;
 mod srt;
 
 #[tokio::main]

@@ -6,11 +6,11 @@ use std::{
 use futures::Sink;
 use tokio::net::UdpSocket;
 
+use crate::srt::proto::Nak;
 use crate::{
     session::SessionManager,
     srt::{proto::Ack, server::SrtStream},
 };
-use crate::{sink::MultiSink, srt::proto::Nak};
 
 use super::state::Connection;
 use super::{proto::AckAck, server::SrtConnStream, state::State, Error};

@@ -1,4 +1,4 @@
-use crate::{session::SessionManager, sink::MultiSink};
+use crate::session::SessionManager;
 
 use super::{proto::Shutdown, server::SrtConnStream, state::State, Error};
 

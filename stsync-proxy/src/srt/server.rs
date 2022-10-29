@@ -19,7 +19,6 @@ use super::config::Config;
 use super::state::{Connection, SocketId, State};
 use crate::proto::{Bits, Decode, Encode};
 use crate::session::SessionManager;
-use crate::sink::MultiSink;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::state::ConnectionId;
 use crate::srt::{ControlPacketType, PacketType};

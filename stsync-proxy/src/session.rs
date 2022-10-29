@@ -1,3 +1,4 @@
+pub mod buffer;
 pub mod file;
 
 use std::fmt::{self, Display, Formatter};
@@ -34,7 +35,7 @@ pub trait SessionManager: Send + Sync + 'static {
 ///
 /// A `ResourceId` is an arbitrary 64-bit number. When used in a string form it is lower hex
 /// encoded. It implements [`Display`] and [`FromStr`] accordingly.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct ResourceId(pub u64);
 

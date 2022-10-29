@@ -1,16 +1,19 @@
+//! SRT handshake
+//!
+//! Currently only the Caller-Listener handshake process is supported.
+//!
+//! See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use tokio::sync::mpsc;
-
 use super::server::SrtStream;
 use super::state::{Connection, State};
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
-use crate::session::{ResourceId, SessionManager};
+use crate::session::SessionManager;
 use crate::srt::ack::send_ack;
 use crate::srt::server::SrtConnStream;
-use crate::srt::state::ConnectionState;
+use crate::srt::state::{ConnectionMode, ConnectionState};
 use crate::srt::{ExtensionField, ExtensionType, HandshakeExtension};
 
 static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
@@ -64,7 +67,7 @@ where
     let server_socket_id = SRV_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
 
     let client_seqnum = packet.initial_packet_sequence_number;
-    let server_seqnum = state.random();
+    let server_seqnum = client_seqnum;
 
     let syn_cookie = state.random();
 
@@ -147,48 +150,82 @@ where
     }
 
     if let Some(ext) = packet.extensions.remove_stream_id() {
-        tracing::info!("StreamId ext: {:?}", ext);
-    }
+        tracing::info!("StreamId ext: {:?} (Parsed {:?})", ext, ext.parse());
 
-    // Setup data handler
-    // TODO: impl resource handling
-    conn.spawn_publish(&state, None);
+        let sid = match ext.parse() {
+            Ok(sid) => sid,
+            Err(err) => {
+                tracing::debug!("Failed to parse streamid extension: {:?}", err);
+                return Ok(());
+            }
+        };
+
+        let resource_id = sid.resource().map(|id| id.parse().ok()).flatten();
+
+        match sid.mode() {
+            Some("request") => match resource_id {
+                Some(id) => {
+                    *conn.mode.lock().unwrap() = ConnectionMode::Request;
+
+                    conn.spawn_request(stream.socket.clone(), &state, id);
+                    tracing::info!("Peer {} listening on resource {}", conn.id.addr, id);
+                }
+                None => return Ok(()),
+            },
+            Some("publish") => {
+                *conn.mode.lock().unwrap() = ConnectionMode::Publish;
+
+                conn.spawn_publish(&state, resource_id);
+
+                tracing::info!(
+                    "Peer {} publishing to resource {:?}",
+                    conn.id.addr,
+                    resource_id
+                );
+
+                let socket = stream.socket.clone();
+                let addr = stream.addr;
+                let conn = conn.clone();
+                tokio::task::spawn(async move {
+                    let stream = SrtConnStream::new(
+                        SrtStream {
+                            socket,
+                            addr,
+                            _marker: &PhantomData,
+                        },
+                        conn,
+                    );
+
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+
+                        let fut = send_ack(&stream);
+                        let shutdown = stream.conn.shutdown.notified();
+
+                        tokio::select! {
+                            res = fut => {
+                                if let Err(err) = res {
+                                    tracing::debug!("Failed to send ACK: {}", err);
+                                }
+                            }
+                            _ = shutdown => {
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            mode => {
+                tracing::trace!("Invalid streamid mode {:?}", mode);
+                return Ok(());
+            }
+        }
+    }
 
     stream.send(packet).await?;
 
     tracing::debug!("Connection from {} INDUCTION -> DONE", stream.addr);
     conn.state.set(ConnectionState::DONE);
-
-    let socket = stream.socket;
-    let addr = stream.addr;
-    tokio::task::spawn(async move {
-        let stream = SrtConnStream::new(
-            SrtStream {
-                socket,
-                addr,
-                _marker: &PhantomData,
-            },
-            conn,
-        );
-
-        loop {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-
-            let fut = send_ack(&stream);
-            let shutdown = stream.conn.shutdown.notified();
-
-            tokio::select! {
-                res = fut => {
-                    if let Err(err) = res {
-                        tracing::debug!("Failed to send ACK: {}", err);
-                    }
-                }
-                _ = shutdown => {
-                    break;
-                }
-            }
-        }
-    });
 
     Ok(())
 }

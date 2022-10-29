@@ -15,6 +15,7 @@ tracing ={ version = "0.1.37", features = ["log-always"] }
 socket2 = "0.4.7"
 snowflaked = { version = "0.1.5", features = ["sync"] }
 bytes = "1.2.1"
+tokio-stream = { version = "0.1.11", features = ["sync"] }
 
 [profile.release]
 opt-level = 3

@@ -1,11 +1,12 @@
 use std::fs::File;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{io, Sink, Stream};
 use snowflaked::sync::Generator;
+use tokio::time::Interval;
 
 use super::{Error, LiveSink, LiveStream, ResourceId, SessionManager};
 
@@ -48,7 +49,21 @@ impl SessionManager for FileSessionManager {
     }
 
     fn request(&self, resource_id: ResourceId) -> Result<LiveStream<Self::Stream>, Error> {
-        Err(Error::InvalidResourceId)
+        let file = match File::open(format!("{}.ts", resource_id)) {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::debug!("Failed to open file {}: ", err);
+                return Err(Error::InvalidResourceId);
+            }
+        };
+
+        Ok(LiveStream::new(
+            resource_id,
+            FileStream {
+                file,
+                is_done: false,
+            },
+        ))
     }
 }
 
@@ -76,14 +91,31 @@ impl Sink<Bytes> for FileSink {
     }
 }
 
+#[derive(Debug)]
 pub struct FileStream {
     file: File,
+    is_done: bool,
 }
 
 impl Stream for FileStream {
     type Item = Bytes;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Poll::Ready(None)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.is_done {
+            return Poll::Ready(None);
+        }
+
+        let mut buf = vec![0; 188 * 7];
+        if let Err(err) = self.file.read_exact(&mut buf) {
+            tracing::info!("File reached EOF");
+            self.is_done = true;
+
+            if err.kind() != ErrorKind::UnexpectedEof {
+                panic!("Failed to read file: {}", err);
+            }
+        }
+
+        std::thread::sleep_ms(1);
+        Poll::Ready(Some(buf.into()))
     }
 }

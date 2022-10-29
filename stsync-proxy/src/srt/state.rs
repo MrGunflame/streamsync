@@ -3,18 +3,20 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use rand::rngs::OsRng;
 use rand::RngCore;
+use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Notify};
 
 use crate::proto::Encode;
 use crate::session::{ResourceId, SessionManager};
+use crate::srt::PacketType;
 
 use super::config::Config;
 use super::conn::AckQueue;
@@ -85,7 +87,7 @@ where
     S: SessionManager,
 {
     pub fn random(&self) -> u32 {
-        self.prng.lock().unwrap().next_u32()
+        self.prng.lock().unwrap().next_u32() >> 1
     }
 }
 
@@ -204,6 +206,11 @@ pub struct Connection {
 
     pub tx: mpsc::Sender<DataPacket>,
     pub rx: Mutex<Option<mpsc::Receiver<DataPacket>>>,
+
+    /// The number of free buffers avaliable. Defaults to 8192.
+    pub buffers_avail: AtomicU32,
+    /// Async waker that should be called if a buffer comes avaliable after it reached 0.
+    pub buffers_waker: Notify,
 }
 
 impl Connection {
@@ -240,6 +247,8 @@ impl Connection {
             shutdown: Notify::new(),
             tx,
             rx: Mutex::new(Some(rx)),
+            buffers_avail: AtomicU32::new(8192),
+            buffers_waker: Notify::new(),
         }
     }
 
@@ -269,13 +278,85 @@ impl Connection {
     {
         let mut rx = self.rx.lock().unwrap().take().unwrap();
 
-        let sink = state.session_manager.publish(resource_id).unwrap();
+        let sink = match state.session_manager.publish(resource_id) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
 
         let mut sink = OutputSink::<S>::new(Arc::downgrade(self), sink);
 
         tokio::task::spawn(async move {
             while let Some(packet) = rx.recv().await {
                 let _ = sink.push(packet).await;
+            }
+        });
+    }
+
+    pub fn spawn_request<S>(
+        self: &Arc<Self>,
+        socket: Arc<UdpSocket>,
+        state: &State<S>,
+        resource_id: ResourceId,
+    ) where
+        S: SessionManager,
+    {
+        let mut stream = match state.session_manager.request(resource_id) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let conn = self.clone();
+
+        tokio::task::spawn(async move {
+            let mut msgnum = 1;
+
+            let shutdown = conn.shutdown.notified();
+
+            let fut = async {
+                while let Some(buf) = stream.next().await {
+                    // Wait for more buffers to become available.
+                    // if conn
+                    //     .buffers_avail
+                    //     .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                    //         if n == 0 {
+                    //             None
+                    //         } else {
+                    //             Some(n - 1)
+                    //         }
+                    //     })
+                    //     .is_err()
+                    // {
+                    //     tracing::info!("Buffering");
+                    //     conn.buffers_waker.notified().await;
+                    // }
+
+                    let seqnum = conn.server_sequence_number.fetch_add(1, Ordering::AcqRel);
+
+                    let mut packet = DataPacket::default();
+                    packet.header.set_packet_type(PacketType::Data);
+                    packet.header.timestamp = conn.timestamp();
+                    packet.header.destination_socket_id = conn.client_socket_id.0;
+                    packet.header().set_packet_sequence_number(seqnum);
+                    packet.header().set_message_number(msgnum);
+                    packet.header().set_ordered(true);
+                    packet
+                        .header()
+                        .set_packet_position(crate::srt::PacketPosition::Full);
+                    packet.data = buf.into();
+
+                    let addr = conn.id.addr;
+                    socket
+                        .send_to(&packet.upcast().encode_to_vec().unwrap(), addr)
+                        .await
+                        .unwrap();
+
+                    msgnum += 1;
+                }
+            };
+
+            tokio::select! {
+                _ = fut => {}
+                _ = shutdown => {}
             }
         });
     }
@@ -372,7 +453,7 @@ pub struct Rtt {
 
 impl Rtt {
     /// Default RTT of 100ms and RTT variance of 50ms.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         let bits = Self::to_bits(100_000, 50_000);
 
         Self {
@@ -407,6 +488,12 @@ impl Rtt {
 
     const fn to_bits(rtt: u32, var: u32) -> u64 {
         ((rtt as u64) << 32) + var as u64
+    }
+}
+
+impl Default for Rtt {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -15,6 +15,33 @@ use crate::{sink::MultiSink, srt::proto::Nak};
 use super::state::Connection;
 use super::{proto::AckAck, server::SrtConnStream, state::State, Error};
 
+pub async fn ack<S>(packet: Ack, stream: SrtConnStream<'_>, state: State<S>) -> Result<(), Error>
+where
+    S: SessionManager,
+{
+    let acknum = packet.acknowledgement_number();
+
+    let avaliable_buffer_size = packet.avaliable_buffer_size;
+
+    // TODO: This should probably just be a CAS.
+    let old = stream
+        .conn
+        .buffers_avail
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |_| {
+            Some(avaliable_buffer_size)
+        })
+        .unwrap();
+
+    if avaliable_buffer_size > 0 && old == 0 {
+        stream.conn.buffers_waker.notify_waiters();
+    }
+
+    let ackack = AckAck::builder().acknowledgement_number(acknum).build();
+
+    stream.send(ackack).await?;
+    Ok(())
+}
+
 pub async fn ackack<S>(
     packet: AckAck,
     stream: SrtConnStream<'_>,

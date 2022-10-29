@@ -60,6 +60,7 @@ where
     loop {
         let mut buf = [0; 1500];
         let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+        tracing::trace!("Got {} bytes from {}", len, addr);
         // println!("Accept {:?}", addr);
 
         let packet = match Packet::decode(&buf[..len]) {
@@ -70,7 +71,9 @@ where
             }
         };
 
-        if let Err(err) = handle_message(packet, addr, socket.clone(), state.clone()).await {
+        let state = state.clone();
+        let socket = socket.clone();
+        if let Err(err) = handle_message(packet, addr, socket, state).await {
             tracing::error!("Error serving connection: {}", err);
         }
     }
@@ -179,6 +182,10 @@ where
             ControlPacketType::Handshake => {
                 tracing::debug!("Got handshake request with non-zero desination socket id");
             }
+            ControlPacketType::Ack => match packet.downcast() {
+                Ok(packet) => super::ack::ack(packet, stream, state).await?,
+                Err(err) => tracing::trace!("Failed to downcast packet to Ack: {}", err),
+            },
             ControlPacketType::AckAck => match packet.downcast() {
                 Ok(packet) => super::ack::ackack(packet, stream, state).await?,
                 Err(err) => tracing::trace!("Failed to downcast packet to AckAck: {}", err),
@@ -190,6 +197,10 @@ where
             ControlPacketType::Keepalive => match packet.downcast() {
                 Ok(packet) => keepalive(packet, stream).await?,
                 Err(err) => tracing::trace!("Failed to downcast packet to Keepalive: {}", err),
+            },
+            ControlPacketType::Nak => match packet.downcast() {
+                Ok(packet) => super::nak::nak(packet, stream, state).await?,
+                Err(err) => tracing::trace!("Failed to downcast packet to Nak: {}", err),
             },
             _ => {
                 tracing::warn!("Unhandled control packet");

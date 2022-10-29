@@ -7,6 +7,7 @@ mod conn;
 mod data;
 mod handshake;
 mod metrics;
+mod nak;
 pub mod proto;
 pub mod server;
 mod shutdown;
@@ -667,21 +668,6 @@ impl Decode for HandshakeType {
             None => Err(Error::InvalidHandshakeType(n)),
         }
     }
-}
-
-// 0                   1                   2                   3
-// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+- SRT Header +-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |1|         Control Type        |            Reserved           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                   Type-specific Information                   |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                           Timestamp                           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                     Destination Socket ID                     |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-pub struct Keepalive {
-    header: Header,
 }
 
 #[derive(Clone, Debug)]

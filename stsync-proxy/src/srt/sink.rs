@@ -111,6 +111,10 @@ where
 
         self.sink.close().await
     }
+
+    fn sink(self: Pin<&mut Self>) -> Pin<&mut LiveSink<S::Sink>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.sink) }
+    }
 }
 
 unsafe impl<S> Send for OutputSink<S> where S: SessionManager + Send {}
@@ -132,8 +136,11 @@ impl BufferQueue {
     }
 
     pub fn insert(&mut self, seq: u32, buf: Vec<u8>) {
-        self.size += buf.len();
-        self.inner.insert(seq, buf);
+        // We never store empty buffers.
+        if buf.len() != 0 {
+            self.size += buf.len();
+            self.inner.insert(seq, buf);
+        }
     }
 
     pub fn remove(&mut self, seq: u32) -> Option<Vec<u8>> {
@@ -144,6 +151,10 @@ impl BufferQueue {
             }
             None => None,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
     }
 
     pub fn clear(&mut self) {

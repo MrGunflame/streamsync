@@ -1,19 +1,23 @@
 pub mod builder;
 
-use std::convert::Infallible;
-use std::io::{self, Read, Write};
+use std::{
+    io::{Cursor, Read, Write},
+    ops::RangeInclusive,
+};
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
 use self::builder::{
-    AckAckBuilder, AckBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder, ShutdownBuilder,
+    AckAckBuilder, AckBuilder, DropRequestBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder,
+    ShutdownBuilder,
 };
 
-use super::{ControlPacketType, Error, Header, InvalidControlType, IsPacket, Packet};
+use super::{ControlPacketType, Error, Header, IsPacket, Packet};
 
 #[derive(Clone, Debug, Default)]
 pub struct Keepalive {
     pub header: Header,
+    _unused: u32,
 }
 
 impl Keepalive {
@@ -28,13 +32,14 @@ impl IsPacket for Keepalive {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: Vec::new(),
+            body: vec![0, 0, 0, 0],
         }
     }
 
     fn downcast(packet: Packet) -> Result<Self, Self::Error> {
         Ok(Self {
             header: packet.header,
+            _unused: 0,
         })
     }
 }
@@ -42,11 +47,13 @@ impl IsPacket for Keepalive {
 impl Encode for Keepalive {
     type Error = Error;
 
-    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
     where
         W: std::io::Write,
     {
-        self.header.encode(writer)
+        self.header.encode(&mut writer)?;
+        self._unused.encode(writer)?;
+        Ok(())
     }
 }
 
@@ -209,6 +216,7 @@ impl SmallAck {}
 #[derive(Clone, Debug)]
 pub struct AckAck {
     pub header: Header,
+    _unused: u32,
 }
 
 impl AckAck {
@@ -230,7 +238,7 @@ impl IsPacket for AckAck {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: Vec::new(),
+            body: vec![0, 0, 0, 0],
         }
     }
 
@@ -242,6 +250,7 @@ impl IsPacket for AckAck {
 
         Ok(Self {
             header: packet.header,
+            _unused: 0,
         })
     }
 }
@@ -265,7 +274,7 @@ impl Nak {
     }
 
     pub fn set_lost_packet_sequence_number(&mut self, n: u32) {
-        self.lost_packet_sequence_numbers = SequenceNumbers::new_single(n);
+        self.lost_packet_sequence_numbers = SequenceNumbers::Single(n);
     }
 
     pub fn set_lost_packet_sequence_numbers<T>(&mut self, seq: T)
@@ -315,6 +324,7 @@ impl Encode for Nak {
 #[derive(Clone, Debug, Default)]
 pub struct Shutdown {
     header: Header,
+    _unused: u32,
 }
 
 impl Shutdown {
@@ -329,7 +339,7 @@ impl IsPacket for Shutdown {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: Vec::new(),
+            body: vec![0, 0, 0, 0],
         }
     }
 
@@ -341,60 +351,94 @@ impl IsPacket for Shutdown {
 
         Ok(Self {
             header: packet.header,
+            _unused: 0,
         })
     }
 }
 
-/// A list of one or more encoded sequence numbers.
+#[derive(Clone, Debug, Default)]
+pub struct DropRequest {
+    pub header: Header,
+    pub first_packet_sequence_number: u32,
+    pub last_packet_sequence_number: u32,
+}
+
+impl DropRequest {
+    pub fn builder() -> DropRequestBuilder {
+        DropRequestBuilder::new()
+    }
+
+    pub fn message_number(&self) -> u32 {
+        self.header.seg1.0 .0
+    }
+
+    pub fn set_message_number(&mut self, n: u32) {
+        self.header.seg1 = Bits(U32(n));
+    }
+}
+
+impl IsPacket for DropRequest {
+    type Error = Error;
+
+    fn upcast(self) -> Packet {
+        let mut body = Vec::new();
+        body.extend(self.first_packet_sequence_number.to_be_bytes());
+        body.extend(self.last_packet_sequence_number.to_be_bytes());
+
+        Packet {
+            header: self.header,
+            body,
+        }
+    }
+
+    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
+        let header = packet.header.as_control()?;
+        if header.control_type() != ControlPacketType::DropReq {
+            return Err(Error::InvalidControlType(header.control_type().to_u16()));
+        }
+
+        let mut cursor = Cursor::new(packet.body);
+
+        let first_packet_sequence_number = u32::decode(&mut cursor)?;
+        let last_packet_sequence_number = u32::decode(cursor)?;
+
+        Ok(Self {
+            header: packet.header,
+            first_packet_sequence_number,
+            last_packet_sequence_number,
+        })
+    }
+}
+
+/// A list of a single sequence number, or a range of sequence numbers.
 ///
 /// See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#appendix-A
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SequenceNumbers {
-    Single(Bits<U32>),
-    Multiple(Vec<Bits<U32>>),
+    Single(u32),
+    Range(RangeInclusive<u32>),
 }
 
 impl SequenceNumbers {
-    pub fn new_single<T>(seq: T) -> Self
-    where
-        T: Into<U32>,
-    {
-        let mut bits = Bits(seq.into());
-        bits.set_bits(0, 0);
-
-        Self::Single(bits)
-    }
-
-    pub fn new_multiple<T, I>(iter: I) -> Self
-    where
-        T: Into<U32>,
-        I: Iterator<Item = T>,
-    {
-        let mut buf: Vec<Bits<U32>> = iter.map(|item| Bits(item.into())).collect();
-
-        for bits in buf.iter_mut() {
-            bits.set_bits(0, 1);
+    pub fn contains(&self, num: u32) -> bool {
+        match self {
+            Self::Single(n) => *n == num,
+            Self::Range(range) => range.contains(&num),
         }
+    }
 
-        if let Some(bits) = buf.last_mut() {
-            bits.set_bits(0, 0);
+    pub fn first(&self) -> u32 {
+        match self {
+            Self::Single(num) => *num,
+            Self::Range(range) => *range.start(),
         }
-
-        Self::Multiple(buf)
     }
 
-    pub fn set_single<T>(&mut self, seq: T)
-    where
-        T: Into<U32>,
-    {
-        let mut bits = Bits(seq.into());
-        bits.set_bits(0, 0);
-
-        *self = Self::Single(bits);
-    }
-
-    fn is_final(bits: Bits<U32>) -> bool {
-        bits.bits(0) == 0
+    pub fn last(&self) -> u32 {
+        match self {
+            Self::Single(num) => *num,
+            Self::Range(range) => *range.end(),
+        }
     }
 }
 
@@ -406,11 +450,21 @@ impl Encode for SequenceNumbers {
         W: Write,
     {
         match self {
-            Self::Single(buf) => buf.encode(writer)?,
-            Self::Multiple(buf) => {
-                for b in buf {
-                    b.encode(&mut writer)?;
-                }
+            Self::Single(num) => {
+                let mut bits = Bits(U32(*num));
+                bits.set_bits(0, 0);
+
+                bits.encode(writer)?;
+            }
+            Self::Range(range) => {
+                let mut start = Bits(U32(*range.start()));
+                start.set_bits(1, 0);
+
+                let mut end = Bits(U32(*range.end()));
+                end.set_bits(0, 0);
+
+                start.encode(&mut writer)?;
+                end.encode(&mut writer)?;
             }
         }
 
@@ -425,51 +479,70 @@ impl Decode for SequenceNumbers {
     where
         R: Read,
     {
-        let seq = Bits::decode(&mut reader)?;
+        let seq = Bits::<U32>::decode(&mut reader)?;
 
-        if Self::is_final(seq) {
-            return Ok(Self::Single(seq));
-        }
+        // Is a range
+        if seq.bits(0) == 1 {
+            let mut start = seq;
+            start.set_bits(0, 0);
 
-        let mut buf = vec![seq];
-        loop {
-            let seq = Bits::decode(&mut reader)?;
-            buf.push(seq);
+            let end = Bits::<U32>::decode(&mut reader)?;
+            // TODO: Check that the ending sequence has the MSB bit set to 0.
 
-            if Self::is_final(seq) {
-                return Ok(Self::Multiple(buf));
-            }
-        }
-    }
-}
-
-impl<A> FromIterator<A> for SequenceNumbers
-where
-    A: Into<U32>,
-{
-    fn from_iter<T: IntoIterator<Item = A>>(iter: T) -> Self {
-        let vec: Vec<U32> = iter.into_iter().map(|item| item.into()).collect();
-
-        if vec.len() == 1 {
-            Self::new_single(vec[0])
+            Ok(Self::Range(start.0 .0..=end.0 .0))
         } else {
-            Self::new_multiple(vec.into_iter())
+            Ok(Self::Single(seq.0 .0))
         }
     }
 }
 
 impl Default for SequenceNumbers {
     fn default() -> Self {
-        Self::Single(Bits(U32(0)))
+        Self::Single(0)
     }
 }
 
-impl<T, A> From<T> for SequenceNumbers
-where
-    T: IntoIterator<Item = A>,
-    A: Into<U32>,
-{
-    fn from(iter: T) -> Self {
-        Self::from_iter(iter.into_iter())
+impl From<u32> for SequenceNumbers {
+    fn from(src: u32) -> Self {
+        Self::Single(src)
+    }
+}
+
+impl From<RangeInclusive<u32>> for SequenceNumbers {
+    fn from(src: RangeInclusive<u32>) -> Self {
+        Self::Range(src)
+    }
+}
+
+impl PartialEq<u32> for SequenceNumbers {
+    fn eq(&self, other: &u32) -> bool {
+        match self {
+            Self::Single(num) => *num == *other,
+            Self::Range(_) => false,
+        }
+    }
+}
+
+impl PartialEq<RangeInclusive<u32>> for SequenceNumbers {
+    fn eq(&self, other: &RangeInclusive<u32>) -> bool {
+        match self {
+            Self::Single(_) => false,
+            Self::Range(range) => range.start() == other.start() && range.end() == other.end(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::proto::Decode;
+
+    use super::SequenceNumbers;
+
+    #[test]
+    fn test_sequence_numbers() {
+        let buf = [0x86, 0x2D, 0x67, 0xFA, 0x06, 0x2D, 0x68, 0x13];
+        let seqnum = SequenceNumbers::decode(&buf[..]).unwrap();
+
+        assert_eq!(seqnum, 103639034..=103639059);
     }
 }

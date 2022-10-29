@@ -3,7 +3,9 @@ use crate::{
     srt::{ControlPacketType, PacketType},
 };
 
-use super::{Ack, AckAck, Keepalive, LightAck, Nak, SequenceNumbers, Shutdown, SmallAck};
+use super::{
+    Ack, AckAck, DropRequest, Keepalive, LightAck, Nak, SequenceNumbers, Shutdown, SmallAck,
+};
 
 #[derive(Clone, Debug)]
 pub struct KeepaliveBuilder(Keepalive);
@@ -248,5 +250,41 @@ impl ShutdownBuilder {
 impl Default for ShutdownBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DropRequestBuilder(DropRequest);
+
+impl DropRequestBuilder {
+    pub fn new() -> Self {
+        let mut packet = DropRequest::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet
+            .header
+            .as_control()
+            .unwrap()
+            .set_control_type(ControlPacketType::DropReq);
+
+        Self(packet)
+    }
+
+    pub fn message_number(mut self, n: u32) -> Self {
+        self.0.set_message_number(n);
+        self
+    }
+
+    pub const fn first_packet_sequence_number(mut self, n: u32) -> Self {
+        self.0.first_packet_sequence_number = n;
+        self
+    }
+
+    pub const fn last_packet_sequence_number(mut self, n: u32) -> Self {
+        self.0.last_packet_sequence_number = n;
+        self
+    }
+
+    pub const fn build(self) -> DropRequest {
+        self.0
     }
 }

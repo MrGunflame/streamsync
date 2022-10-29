@@ -81,21 +81,23 @@ where
 
             self.queue.insert(msgnum, packet.data);
 
-            if self.skip_counter >= 20 {
-                tracing::trace!("Skip ahead (20 segments)");
+            if self.skip_counter >= 40 {
+                tracing::trace!("Skip ahead (HEAD {} => {})", self.next_msgnum, msgnum);
+                let mut num_lost = msgnum - self.next_msgnum;
+
                 while self.next_msgnum <= msgnum {
                     if let Some(buf) = self.queue.remove(self.next_msgnum) {
                         self.sink.feed(buf.into()).await?;
-                        self.skip_counter -= 1;
+                        num_lost -= 1;
                     }
 
                     self.next_msgnum += 1;
                 }
 
-                tracing::trace!("Lost {} segments", self.skip_counter);
+                tracing::trace!("Lost {} segments", num_lost);
 
                 if let Some(conn) = self.conn.upgrade() {
-                    conn.metrics.packets_dropped.add(self.skip_counter as usize);
+                    conn.metrics.packets_dropped.add(num_lost as usize);
                 }
 
                 self.skip_counter = 0;

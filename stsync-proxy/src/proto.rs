@@ -121,11 +121,17 @@ where
     {
         let range = range.into_bit_range();
 
-        // Shift bits to the correct position.
-        let bits = val.into() << self.0.bits() - range.end;
+        // Number of bits
+        let num = range.len();
+        let start = self.0.bits() - range.end;
 
-        // Subtract the current value of the masked bits, then add the new bits.
-        self.0 = (self.0 - self.bits(range)) + bits;
+        let mask = ((1 << num) - 1) << start;
+
+        let curr = self.0 & mask;
+        let new = val.into() << start;
+
+        // Subtract the current value, then add the new value.
+        self.0 = self.0 - curr + new;
     }
 }
 
@@ -355,6 +361,23 @@ mod tests {
         assert_eq!(bits.bits(1..8), 0);
         assert_eq!(bits.bits(8..16), 6);
         assert_eq!(bits.bits(16..32), 0);
+
+        let mut bits = Bits(U16(256));
+        assert_eq!(bits.bits(0..7), 0);
+        assert_eq!(bits.bits(7..8), 1);
+        assert_eq!(bits.bits(8..16), 0);
+
+        bits.set_bits(0..1, 1);
+        assert_eq!(bits.bits(0..1), 1);
+        assert_eq!(bits.bits(1..7), 0);
+        assert_eq!(bits.bits(7..8), 1);
+        assert_eq!(bits.bits(8..16), 0);
+
+        bits.set_bits(0..1, 0);
+        assert_eq!(bits.bits(0..1), 0);
+        assert_eq!(bits.bits(1..7), 0);
+        assert_eq!(bits.bits(7..8), 1);
+        assert_eq!(bits.bits(8..16), 0);
     }
 }
 

@@ -440,6 +440,14 @@ impl SequenceNumbers {
             Self::Range(range) => *range.end(),
         }
     }
+
+    /// Returns the number of sequence numbers encapsulated.
+    pub fn len(&self) -> u32 {
+        match self {
+            Self::Single(_) => 1,
+            Self::Range(range) => range.end() - range.start(),
+        }
+    }
 }
 
 impl Encode for SequenceNumbers {

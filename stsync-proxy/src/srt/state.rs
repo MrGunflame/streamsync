@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -123,6 +123,10 @@ impl ConnectionPool {
         self.inner.lock().unwrap().get(conn.borrow()).cloned()
     }
 
+    pub fn iter<'a>(&'a self) -> MutexGuard<'a, HashSet<Arc<Connection>>> {
+        self.inner.lock().unwrap()
+    }
+
     pub async fn clean(&self) -> usize {
         let removed = {
             let mut inner = self.inner.lock().unwrap();
@@ -162,6 +166,29 @@ impl ConnectionPool {
         }
 
         None
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectionPoolIter<'a> {
+    pool: MutexGuard<'a, std::collections::hash_map::Values<'a, ConnectionId, Arc<Connection>>>,
+}
+
+impl<'a> Iterator for ConnectionPoolIter<'a> {
+    type Item = &'a Connection;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pool.next().map(|ptr| Arc::deref(ptr))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.pool.len(), Some(self.pool.len()))
+    }
+}
+
+impl<'a> ExactSizeIterator for ConnectionPoolIter<'a> {
+    fn len(&self) -> usize {
+        self.pool.len()
     }
 }
 
@@ -470,7 +497,7 @@ impl Rtt {
         // See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.10
         let _ = self
             .cell
-            .fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
                 let (mut rtt, mut var) = Self::from_bits(bits);
 
                 var = ((3.0 / 4.0) * var as f32 + (1.0 / 4.0) * rtt.abs_diff(new) as f32) as u32;

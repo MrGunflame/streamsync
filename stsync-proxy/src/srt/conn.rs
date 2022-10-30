@@ -1,14 +1,21 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
 
 use futures::Stream;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 
+use super::metrics::ConnectionMetrics;
 use super::Packet;
 
-pub struct Connection {}
+#[derive(Debug)]
+pub struct Connection {
+    incoming: mpsc::Receiver<Packet>,
+    metrics: Arc<ConnectionMetrics>,
+}
 
 #[derive(Clone, Debug)]
 pub struct AckQueue {

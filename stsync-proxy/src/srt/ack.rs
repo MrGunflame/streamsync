@@ -78,6 +78,7 @@ where
 pub async fn send_ack(stream: &SrtConnStream<'_>) -> Result<(), Error> {
     tracing::trace!("Sending ACK");
 
+    // Send periodic NAK report instead of ACK.
     // Send a NAK with all lost seqnums instead.
     // {
     //     let packet = {
@@ -116,7 +117,7 @@ pub async fn send_ack(stream: &SrtConnStream<'_>) -> Result<(), Error> {
             .rtt_variance(rtt_variance)
             .avaliable_buffer_size(5000)
             .packets_receiving_rate(packet_recv_rate as u32)
-            .estimated_link_capacity(5000)
+            .estimated_link_capacity(packet_recv_rate as u32)
             .receiving_rate(bytes_recv_rate as u32)
             .build();
 

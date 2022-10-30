@@ -18,11 +18,13 @@ where
     stream.conn.send(packet).await;
 
     let client_sequence_number = stream.conn.client_sequence_number.load(Ordering::Acquire);
-    // if client_sequence_number != seqnum {
-    //     // Append the lost sequence number.
-    //     let mut lost_packets = stream.conn.lost_packets.lock().unwrap();
-    //     lost_packets.push(client_sequence_number);
-    // }
+
+    // Lost a packet.
+    if client_sequence_number != seqnum {
+        // Append the lost sequence number.
+        let mut lost_packets = stream.conn.lost_packets.lock().unwrap();
+        lost_packets.push(client_sequence_number);
+    }
 
     let mut lost_packets = stream.conn.lost_packets.lock().unwrap();
     lost_packets.retain(|seq| *seq != seqnum);

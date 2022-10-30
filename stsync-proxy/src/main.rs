@@ -1,12 +1,15 @@
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
 use srt::config::Config;
 
+mod http;
+mod metrics;
 mod proto;
 mod rtcp;
 mod rtmp;
 mod rtp;
 mod session;
 mod srt;
+mod state;
 
 #[tokio::main]
 async fn main() {
@@ -14,7 +17,11 @@ async fn main() {
 
     let manager = BufferSessionManager::new();
 
-    srt::server::serve("[::]:9999", manager, Config::default())
-        .await
-        .unwrap();
+    let (state, fut) = srt::server::serve("[::]:9999", manager, Config::default());
+
+    tokio::task::spawn(async move {
+        http::serve(state).await;
+    });
+
+    fut.await.unwrap();
 }

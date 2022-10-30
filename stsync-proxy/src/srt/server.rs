@@ -25,57 +25,72 @@ use crate::srt::{ControlPacketType, PacketType};
 
 use super::{Error, IsPacket, Packet};
 
-pub async fn serve<A, S>(addr: A, session_manager: S, config: Config) -> Result<(), io::Error>
+pub fn serve<A, S>(
+    addr: A,
+    session_manager: S,
+    config: Config,
+) -> (State<S>, impl Future<Output = Result<(), io::Error>>)
 where
     A: ToSocketAddrs,
     S: SessionManager + 'static,
 {
-    let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
-    socket.set_recv_buffer_size(500_000_000)?;
-    socket.bind(&SocketAddr::from_str("[::]:9999").unwrap().into())?;
-
-    let socket = UdpSocket::from_std(socket.into())?;
-    tracing::info!("Listing on {}", socket.local_addr()?);
-
     let state = State::new(session_manager, config);
 
-    // Clean regularly
-    let state2 = state.clone();
-    tokio::task::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::new(15, 0)).await;
-            tracing::trace!("Tick cleanup");
-            let num_removed = state2.pool.clean().await;
-            tracing::debug!(
-                "Purged {} connections ({} alive)",
-                num_removed,
-                state2.pool.len()
-            );
-        }
-    });
-
-    let socket = Arc::new(socket);
-
-    loop {
-        let mut buf = [0; 1500];
-        let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
-        tracing::trace!("Got {} bytes from {}", len, addr);
-        // println!("Accept {:?}", addr);
-
-        let packet = match Packet::decode(&buf[..len]) {
-            Ok(packet) => packet,
-            Err(err) => {
-                println!("Failed to decode packet: {}", err);
-                continue;
-            }
-        };
-
+    let fut = {
         let state = state.clone();
-        let socket = socket.clone();
-        if let Err(err) = handle_message(packet, addr, socket, state).await {
-            tracing::error!("Error serving connection: {}", err);
+        async move {
+            let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+            socket.set_recv_buffer_size(500_000_000)?;
+            socket.bind(&SocketAddr::from_str("0.0.0.0:9999").unwrap().into())?;
+
+            let rx = socket.recv_buffer_size()?;
+            let tx = socket.send_buffer_size()?;
+
+            let socket = UdpSocket::from_std(socket.into())?;
+            tracing::info!("Listing on {}", socket.local_addr()?);
+
+            tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
+
+            // Clean regularly
+            let state2 = state.clone();
+            tokio::task::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::new(15, 0)).await;
+                    tracing::trace!("Tick cleanup");
+                    let num_removed = state2.pool.clean().await;
+                    tracing::debug!(
+                        "Purged {} connections ({} alive)",
+                        num_removed,
+                        state2.pool.len()
+                    );
+                }
+            });
+
+            let socket = Arc::new(socket);
+
+            loop {
+                let mut buf = [0; 1500];
+                let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+                tracing::trace!("Got {} bytes from {}", len, addr);
+
+                let packet = match Packet::decode(&buf[..len]) {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        println!("Failed to decode packet: {}", err);
+                        continue;
+                    }
+                };
+
+                let state = state.clone();
+                let socket = socket.clone();
+                if let Err(err) = handle_message(packet, addr, socket, state).await {
+                    tracing::error!("Error serving connection: {}", err);
+                }
+            }
         }
-    }
+    };
+
+    (state, fut)
 }
 
 // // println!("handle data");
@@ -276,7 +291,7 @@ pub fn close_metrics(conn: &Connection) {
         |  SENT  | RECV | DROP | RTT |\n
         | ------ | ---- | ---- | --- |\n
         | {}     | {}   | {}   | {}us |\n
-        | {}     | {}   | -    | {}us |\n
+        | {}     | {}   | {} (ESTIMATE)    | {}us |\n
         ",
         conn.metrics.packets_sent,
         conn.metrics.packets_recv,
@@ -284,6 +299,7 @@ pub fn close_metrics(conn: &Connection) {
         conn.rtt.load().0,
         conn.metrics.bytes_sent,
         conn.metrics.bytes_recv,
+        conn.metrics.packets_dropped.load() * 1500,
         conn.rtt.load().1,
     );
 }

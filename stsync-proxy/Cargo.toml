@@ -15,6 +15,7 @@ socket2 = "0.4.7"
 snowflaked = { version = "0.1.5", features = ["sync"] }
 bytes = "1.2.1"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
+hyper = { version = "0.14.20", features = ["http1", "http2", "server"] }
 
 [profile.release]
 opt-level = 3

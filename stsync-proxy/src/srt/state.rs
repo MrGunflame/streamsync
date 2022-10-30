@@ -3,12 +3,12 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
+use ahash::AHashSet;
+use futures::StreamExt;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use tokio::net::UdpSocket;
@@ -93,7 +93,7 @@ where
 
 #[derive(Debug)]
 pub struct ConnectionPool {
-    inner: Mutex<HashSet<Arc<Connection>>>,
+    inner: Mutex<AHashSet<Arc<Connection>>>,
 }
 
 impl ConnectionPool {
@@ -123,7 +123,7 @@ impl ConnectionPool {
         self.inner.lock().unwrap().get(conn.borrow()).cloned()
     }
 
-    pub fn iter<'a>(&'a self) -> MutexGuard<'a, HashSet<Arc<Connection>>> {
+    pub fn iter<'a>(&'a self) -> MutexGuard<'a, AHashSet<Arc<Connection>>> {
         self.inner.lock().unwrap()
     }
 

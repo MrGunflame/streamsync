@@ -50,6 +50,11 @@ impl AckBuilder {
         Self(packet)
     }
 
+    pub fn acknowledgement_number(mut self, n: u32) -> Self {
+        self.0.set_acknowledgement_number(n);
+        self
+    }
+
     pub const fn last_acknowledged_packet_sequence_number(mut self, n: u32) -> Self {
         self.0.last_acknowledged_packet_sequence_number = n;
         self

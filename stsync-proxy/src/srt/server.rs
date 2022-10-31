@@ -1,18 +1,10 @@
-use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::future::Future;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
-
-use futures::{Sink, Stream, StreamExt};
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use std::sync::Arc;
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
 use super::config::Config;
@@ -21,7 +13,6 @@ use crate::proto::{Bits, Decode, Encode};
 use crate::session::SessionManager;
 use crate::srt::proto::{Keepalive, LightAck};
 use crate::srt::state::ConnectionId;
-use crate::srt::{ControlPacketType, PacketType};
 
 use super::{Error, IsPacket, Packet};
 
@@ -37,7 +28,11 @@ where
     let state = State::new(session_manager, config);
 
     let fut = {
+        // NOTE: This `state` instance MUST outlive all connections in the pool. Only after the
+        // pool is emptied (all handles are closed) and no new udp frames are accepted may the
+        // state be dropped.
         let state = state.clone();
+
         async move {
             let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
             socket.set_recv_buffer_size(500_000_000)?;
@@ -50,21 +45,6 @@ where
             tracing::info!("Listing on {}", socket.local_addr()?);
 
             tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
-
-            // Clean regularly
-            let state2 = state.clone();
-            tokio::task::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::new(15, 0)).await;
-                    tracing::trace!("Tick cleanup");
-                    let num_removed = state2.pool.clean().await;
-                    tracing::debug!(
-                        "Purged {} connections ({} alive)",
-                        num_removed,
-                        state2.pool.len()
-                    );
-                }
-            });
 
             let socket = Arc::new(socket);
 
@@ -81,9 +61,8 @@ where
                     }
                 };
 
-                let state = state.clone();
                 let socket = socket.clone();
-                if let Err(err) = handle_message(packet, addr, socket, state).await {
+                if let Err(err) = handle_message(packet, addr, socket, &state).await {
                     tracing::error!("Error serving connection: {}", err);
                 }
             }
@@ -141,7 +120,7 @@ async fn handle_message<S>(
     mut packet: Packet,
     addr: SocketAddr,
     socket: Arc<UdpSocket>,
-    state: State<S>,
+    state: &State<S>,
 ) -> Result<(), Error>
 where
     S: SessionManager,
@@ -168,65 +147,18 @@ where
         return Ok(());
     }
 
-    let stream = match state.pool.get(ConnectionId {
-        addr,
-        socket_id: packet.header.destination_socket_id.into(),
-    }) {
-        Some(conn) => {
-            *conn.last_packet_time.lock().unwrap() = Instant::now();
-            conn.packets_recv.fetch_add(1, Ordering::Relaxed);
-            conn.bytes_recv
-                .fetch_add(packet.size() as u32, Ordering::Relaxed);
-
-            conn.metrics.packets_recv.add(1);
-            conn.metrics.bytes_recv.add(packet.size());
-
-            SrtConnStream { stream, conn }
-        }
-        None => return Ok(()),
+    let id = ConnectionId {
+        addr: stream.addr,
+        server_socket_id: packet.header.destination_socket_id.into(),
+        client_socket_id: packet.header.destination_socket_id.into(),
     };
 
-    tracing::debug!(
-        "Found message from existing client {}",
-        stream.conn.server_socket_id.0
-    );
-
-    match packet.header.packet_type() {
-        PacketType::Control => match packet.header.as_control().unwrap().control_type() {
-            ControlPacketType::Handshake => {
-                tracing::debug!("Got handshake request with non-zero desination socket id");
-            }
-            ControlPacketType::Ack => match packet.downcast() {
-                Ok(packet) => super::ack::ack(packet, stream, state).await?,
-                Err(err) => tracing::trace!("Failed to downcast packet to Ack: {}", err),
-            },
-            ControlPacketType::AckAck => match packet.downcast() {
-                Ok(packet) => super::ack::ackack(packet, stream, state).await?,
-                Err(err) => tracing::trace!("Failed to downcast packet to AckAck: {}", err),
-            },
-            ControlPacketType::Shutdown => match packet.downcast() {
-                Ok(packet) => super::shutdown::shutdown(packet, stream, state).await?,
-                Err(err) => tracing::trace!("Failed to downcast packet to Shutdown: {}", err),
-            },
-            ControlPacketType::Keepalive => match packet.downcast() {
-                Ok(packet) => keepalive(packet, stream).await?,
-                Err(err) => tracing::trace!("Failed to downcast packet to Keepalive: {}", err),
-            },
-            ControlPacketType::Nak => match packet.downcast() {
-                Ok(packet) => super::nak::nak(packet, stream, state).await?,
-                Err(err) => tracing::trace!("Failed to downcast packet to Nak: {}", err),
-            },
-            _ => {
-                tracing::warn!("Unhandled control packet");
-            }
-        },
-        PacketType::Data => {
-            // println!("got data");
-
-            match packet.downcast() {
-                Ok(packet) => super::data::handle_data(packet, stream, state).await?,
-                Err(err) => tracing::trace!("Failed to downcast to DataPacket: {}", err),
-            }
+    match state.pool.get(id) {
+        Some(handle) => {
+            let _ = handle.send(packet).await;
+        }
+        None => {
+            tracing::debug!("Received packet from unknown client {}", id);
         }
     }
 

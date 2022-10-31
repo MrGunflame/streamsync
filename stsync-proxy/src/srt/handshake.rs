@@ -3,20 +3,19 @@
 //! Currently only the Caller-Listener handshake process is supported.
 //!
 //! See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::Instant;
 
+use tokio::sync::mpsc;
+
+use super::conn::{Connection, ConnectionMode};
 use super::server::SrtStream;
-use super::state::{Connection, State};
+use super::state::State;
+use super::IsPacket;
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::session::SessionManager;
-use crate::srt::ack::send_ack;
-use crate::srt::server::SrtConnStream;
-use crate::srt::state::{ConnectionMode, ConnectionState};
-use crate::srt::{ExtensionField, ExtensionType, HandshakeExtension};
-
-static SRV_SOCKET_ID: AtomicU32 = AtomicU32::new(1);
+use crate::srt::conn::{AckQueue, PollState, Rtt, TickInterval};
+use crate::srt::state::ConnectionId;
+use crate::srt::ExtensionField;
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
 macro_rules! srt_assert {
@@ -32,7 +31,7 @@ macro_rules! srt_assert {
 pub async fn handshake<S>(
     packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State<S>,
+    state: &State<S>,
 ) -> Result<(), Error>
 where
     S: SessionManager,
@@ -50,7 +49,7 @@ where
 async fn handshake_induction<S>(
     packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State<S>,
+    state: &State<S>,
 ) -> Result<(), Error>
 where
     S: SessionManager,
@@ -64,7 +63,7 @@ where
     srt_assert!(packet.syn_cookie, 0);
 
     let client_socket_id = packet.srt_socket_id;
-    let server_socket_id = SRV_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+    let server_socket_id = packet.srt_socket_id;
 
     let client_seqnum = packet.initial_packet_sequence_number;
     let server_seqnum = client_seqnum;
@@ -88,22 +87,46 @@ where
 
     stream.send(resp).await?;
 
-    let mut conn = Connection::new(stream.addr, server_socket_id, client_socket_id);
-    conn.client_sequence_number = AtomicU32::new(client_seqnum);
-    conn.server_sequence_number = AtomicU32::new(server_seqnum);
-    conn.syn_cookie = AtomicU32::new(syn_cookie);
-    conn.state.set(ConnectionState::INDUCTION);
+    let (tx, rx) = mpsc::channel(1024);
+
+    let id = ConnectionId {
+        addr: stream.addr,
+        server_socket_id: server_socket_id.into(),
+        client_socket_id: client_socket_id.into(),
+    };
+
+    let conn = Connection {
+        id,
+        incoming: rx,
+        state: state.into(),
+        server_socket_id,
+        client_socket_id,
+        server_sequence_number: server_seqnum,
+        client_sequence_number: client_seqnum,
+        mode: ConnectionMode::Induction { syn_cookie },
+        inflight_acks: AckQueue::new(),
+        rtt: Rtt::new(),
+        tick_interval: TickInterval::new(),
+        start_time: Instant::now(),
+        socket: stream.socket.clone(),
+        last_time: Instant::now(),
+        poll_state: PollState::default(),
+    };
+
+    tokio::task::spawn(async move {
+        conn.await;
+    });
 
     tracing::debug!("Adding new client");
-    state.pool.insert(conn);
+    state.pool.insert(id, tx);
 
     Ok(())
 }
 
 async fn handshake_conclusion<S>(
-    mut packet: HandshakePacket,
+    packet: HandshakePacket,
     stream: SrtStream<'_>,
-    state: State<S>,
+    state: &State<S>,
 ) -> Result<(), Error>
 where
     S: SessionManager,
@@ -127,197 +150,7 @@ where
         }
     };
 
-    srt_assert!(packet.syn_cookie, conn.syn_cookie.load(Ordering::Relaxed));
-
-    packet.header.timestamp = conn.timestamp();
-    packet.header.destination_socket_id = packet.srt_socket_id;
-
-    packet.syn_cookie = 0;
-    packet.srt_socket_id = conn.server_socket_id.0;
-    packet.initial_packet_sequence_number = conn.server_sequence_number.load(Ordering::Relaxed);
-
-    // Integrated handshake extensions
-    if let Some(mut ext) = packet.extensions.remove_hsreq() {
-        ext.sender_tsbpd_delay = conn.start_time.elapsed().as_micros() as u16;
-
-        packet.extensions.0.push(HandshakeExtension {
-            extension_type: ExtensionType::HSRSP,
-            extension_length: 3,
-            extension_content: ext.into(),
-        });
-
-        packet.extension_field = ExtensionField::HSREQ;
-    }
-
-    if let Some(ext) = packet.extensions.remove_stream_id() {
-        tracing::info!("StreamId ext: {:?} (Parsed {:?})", ext, ext.parse());
-
-        let sid = match ext.parse() {
-            Ok(sid) => sid,
-            Err(err) => {
-                tracing::debug!("Failed to parse streamid extension: {:?}", err);
-                return Ok(());
-            }
-        };
-
-        let resource_id = sid.resource().map(|id| id.parse().ok()).flatten();
-
-        match sid.mode() {
-            Some("request") => match resource_id {
-                Some(id) => {
-                    *conn.mode.lock().unwrap() = ConnectionMode::Request;
-
-                    conn.spawn_request(stream.socket.clone(), &state, id);
-                    tracing::info!("Peer {} listening on resource {}", conn.id.addr, id);
-                }
-                None => return Ok(()),
-            },
-            Some("publish") => {
-                *conn.mode.lock().unwrap() = ConnectionMode::Publish;
-
-                conn.spawn_publish(&state, resource_id);
-
-                tracing::info!(
-                    "Peer {} publishing to resource {:?}",
-                    conn.id.addr,
-                    resource_id
-                );
-
-                let socket = stream.socket.clone();
-                let addr = stream.addr;
-                let conn = conn.clone();
-                tokio::task::spawn(async move {
-                    let stream = SrtConnStream::new(
-                        SrtStream {
-                            socket,
-                            addr,
-                            _marker: &PhantomData,
-                        },
-                        conn,
-                    );
-
-                    loop {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-
-                        let fut = send_ack(&stream);
-                        let shutdown = stream.conn.shutdown.notified();
-
-                        tokio::select! {
-                            res = fut => {
-                                if let Err(err) = res {
-                                    tracing::debug!("Failed to send ACK: {}", err);
-                                }
-                            }
-                            _ = shutdown => {
-                                break;
-                            }
-                        }
-                    }
-                });
-            }
-            mode => {
-                tracing::trace!("Invalid streamid mode {:?}", mode);
-                return Ok(());
-            }
-        }
-    }
-
-    stream.send(packet).await?;
-
-    tracing::debug!("Connection from {} INDUCTION -> DONE", stream.addr);
-    conn.state.set(ConnectionState::DONE);
+    let _ = conn.send(packet.upcast()).await;
 
     Ok(())
 }
-
-// pub async fn handshake(stream: &Arc<UdpSocket>, state: State) -> Result<Connection, Error> {
-//     let start_time = Instant::now();
-
-//     // Ethernet frame size for now.
-//     // TODO: Only stack-allocate the required size for HandshakePacket.
-//     let mut buf = [0; 1500];
-
-//     // Induction phase
-//     let (_, addr) = stream.recv_from(&mut buf).await?;
-
-//     let packet = HandshakePacket::decode(&buf[..])?;
-
-//     println!("{:?}", packet);
-
-//     assert_eq!(packet.header.packet_type(), PacketType::Control);
-//     assert_eq!(packet.version, 4);
-//     assert_eq!(packet.encryption_field, 0);
-//     assert_eq!(packet.extension_field, 2);
-//     assert_eq!(packet.handshake_type, HandshakeType::Induction);
-//     assert_eq!(packet.syn_cookie, 0);
-
-//     let caller_initial_sequence_number = packet.initial_packet_sequence_number;
-
-//     let caller_socket_id = packet.srt_socket_id;
-//     let listener_socket_id = 69u32;
-
-//     println!("Got valid INDUCTION from caller");
-
-//     let mut resp = HandshakePacket::default();
-//     resp.header.seg0.set_bits(0, 1);
-//     resp.header.timestamp = packet.header.timestamp + 1;
-
-//     resp.initial_packet_sequence_number = 12345;
-//     resp.maximum_transmission_unit_size = 1500;
-//     resp.maximum_flow_window_size = 8192;
-//     resp.peer_ip_address += u32::from_be_bytes([127, 0, 0, 1]) as u128;
-
-//     // SRT
-//     resp.version = 5;
-//     resp.encryption_field = 0;
-//     resp.extension_field = 0x4A17;
-//     resp.handshake_type = HandshakeType::Induction;
-//     resp.srt_socket_id = listener_socket_id;
-//     // "random"
-//     resp.syn_cookie = 420;
-
-//     let mut buf = Vec::new();
-//     resp.encode(&mut buf)?;
-//     stream.send_to(&buf, addr).await?;
-
-//     println!("{:?}", resp);
-//     println!("{:?}", buf);
-//     println!("Send INDUCTION to caller");
-
-//     // Conclusion
-
-//     let mut buf = [0; 1500];
-//     let (len, addr) = stream.recv_from(&mut buf).await?;
-
-//     let packet = HandshakePacket::decode(&buf[..])?;
-
-//     println!("{:?}", packet);
-
-//     assert_eq!(packet.version, 5);
-//     assert_eq!(packet.handshake_type, HandshakeType::Conclusion);
-//     assert_eq!(packet.srt_socket_id, caller_socket_id);
-//     assert_eq!(packet.syn_cookie, 420);
-//     assert_eq!(packet.encryption_field, 0);
-
-//     println!("Got Valid CONCLUSION from caller");
-
-//     stream.send_to(&buf[..len], addr).await?;
-
-//     let socket = stream.clone();
-//     tokio::task::spawn(async move {
-//         loop {
-//             // 10MS
-//             tokio::time::sleep(std::time::Duration::new(0, 10_000_000)).await;
-//         }
-//     });
-
-//     Ok(Connection {
-//         start_time,
-//         server_socket_id: SocketId(listener_socket_id),
-//         client_socket_id: SocketId(caller_socket_id),
-//         client_sequence_number: caller_initial_sequence_number,
-//         rtt: 100_000,
-//         rtt_variance: 50_000,
-//         state: HandshakeType::Done,
-//     })
-// }

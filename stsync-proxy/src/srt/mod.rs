@@ -82,6 +82,10 @@ impl Header {
         }
     }
 
+    pub fn as_control_unchecked(&mut self) -> ControlHeader<'_> {
+        ControlHeader { header: self }
+    }
+
     pub fn as_data_unchecked(&mut self) -> DataHeader<'_> {
         DataHeader { header: self }
     }
@@ -100,6 +104,13 @@ impl Encode for Header {
         self.destination_socket_id.encode(&mut writer)?;
 
         Ok(())
+    }
+
+    fn size_hint(&self) -> usize {
+        Encode::size_hint(&self.seg0)
+            + Encode::size_hint(&self.seg1)
+            + Encode::size_hint(&self.timestamp)
+            + Encode::size_hint(&self.destination_socket_id)
     }
 }
 
@@ -715,6 +726,10 @@ impl Encode for Packet {
         self.body.encode(&mut writer)?;
         Ok(())
     }
+
+    fn size_hint(&self) -> usize {
+        Encode::size_hint(&self.header) + Encode::size_hint(self.body.as_slice())
+    }
 }
 
 impl Decode for Packet {
@@ -1294,11 +1309,44 @@ impl StreamIdExtension {
 impl Encode for StreamIdExtension {
     type Error = Error;
 
-    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
-        self.content.as_bytes().encode(writer)?;
+        let mut buf = self.content.as_bytes();
+
+        while buf.len() >= 4 {
+            // Copy the chunk from the buffer.
+            let mut bytes = [0; 4];
+
+            // SAFETY: `bytes` always has exactly 4 bytes of space.
+            unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), bytes.as_mut_ptr(), 4) };
+
+            bytes.reverse();
+
+            writer.write_all(&bytes)?;
+
+            buf = &buf[4..];
+        }
+
+        // Write the remaining chunk.
+        if buf.len() > 0 {
+            // Create a new buffer initialized with zero. Copy the remaining buffer into the new
+            // buffer. All remaining bytes stay zero as required.
+            let mut bytes = [0; 4];
+
+            // SAFETY: `buf` is guaranteed to have less than 4 bytes remaining, meaning
+            // we always have enough room in the new buffer.
+            debug_assert!(buf.len() < 4);
+            unsafe {
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), bytes.as_mut_ptr(), buf.len());
+            }
+
+            bytes.reverse();
+
+            writer.write_all(&bytes)?;
+        }
+
         Ok(())
     }
 }
@@ -1498,5 +1546,25 @@ impl ExtensionContent {
 impl From<HandshakeExtensionMessage> for ExtensionContent {
     fn from(src: HandshakeExtensionMessage) -> Self {
         Self::Handshake(src)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::proto::{Decode, Encode};
+
+    use super::StreamIdExtension;
+
+    #[test]
+    fn test_streamid_extension() {
+        let buf = [
+            0x3a, 0x3a, 0x21, 0x23, 0x65, 0x72, 0x3d, 0x6d, 0x73, 0x65, 0x75, 0x71, 0x3d, 0x72,
+            0x2c, 0x74, 0x35, 0x33, 0x32, 0x31,
+        ];
+
+        let ext = StreamIdExtension::decode(&buf[..]).unwrap();
+        assert_eq!(ext.content, "#!::m=request,r=1235");
+
+        assert_eq!(ext.encode_to_vec().unwrap(), buf);
     }
 }

@@ -18,9 +18,16 @@ pub trait Encode {
         W: Write;
 
     fn encode_to_vec(&self) -> Result<Vec<u8>, Self::Error> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(self.size_hint());
         self.encode(&mut buf)?;
         Ok(buf)
+    }
+
+    /// Returns a hint about the expected size of `self` requires for encoding. The returned value
+    /// is purely a hint and not a guarantee.
+    #[inline]
+    fn size_hint(&self) -> usize {
+        0
     }
 }
 
@@ -36,6 +43,11 @@ macro_rules! impl_uint_be {
                 {
                     writer.write_all(&self.to_be_bytes())
                 }
+
+                #[inline]
+                fn size_hint(&self) -> usize {
+                    mem::size_of::<Self>()
+                }
             }
 
             impl Decode for $t {
@@ -45,7 +57,7 @@ macro_rules! impl_uint_be {
                 where
                     R: Read
                 {
-                    let mut buf = [0;mem::size_of::<Self>()];
+                    let mut buf = [0 ;mem::size_of::<Self>()];
                     reader.read_exact(&mut buf)?;
                     Ok(Self::from_be_bytes(buf))
                 }
@@ -70,6 +82,10 @@ impl Encode for [u8] {
         W: Write,
     {
         writer.write_all(&self)
+    }
+
+    fn size_hint(&self) -> usize {
+        self.len()
     }
 }
 
@@ -299,6 +315,10 @@ macro_rules! uint_newtype {
                     W: Write
                 {
                     self.0.encode(writer)
+                }
+
+                fn size_hint(&self) -> usize {
+                    Encode::size_hint(&self.0)
                 }
             }
 

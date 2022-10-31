@@ -9,7 +9,7 @@ use futures::{Sink, SinkExt};
 
 use crate::session::{LiveSink, SessionManager};
 
-use super::state::Connection;
+use super::conn::Connection;
 use super::DataPacket;
 
 // TODO: OutputSink should implement futures::Sink instead of a "push" method.
@@ -23,21 +23,20 @@ where
     sink: LiveSink<S::Sink>,
     queue: BufferQueue,
     skip_counter: u8,
-
-    conn: Weak<Connection>,
+    // conn: Weak<Connection>,
 }
 
 impl<S> OutputSink<S>
 where
     S: SessionManager,
 {
-    pub fn new(conn: Weak<Connection>, sink: LiveSink<S::Sink>) -> Self {
+    pub fn new(conn: &Connection<S>, sink: LiveSink<S::Sink>) -> Self {
         Self {
             next_msgnum: 1,
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
-            conn,
+            // conn,
         }
     }
 
@@ -96,9 +95,9 @@ where
 
                 tracing::trace!("Lost {} segments", num_lost);
 
-                if let Some(conn) = self.conn.upgrade() {
-                    conn.metrics.packets_dropped.add(num_lost as usize);
-                }
+                // if let Some(conn) = self.conn.upgrade() {
+                //     conn.metrics.packets_dropped.add(num_lost as usize);
+                // }
 
                 self.skip_counter = 0;
             }

@@ -43,48 +43,48 @@ where
 
 async fn metrics<S: SessionManager>(state: &State<S>) -> Response<Body> {
     let mut string = String::new();
-    let guard = state.pool.iter();
-    let iter = guard.iter();
-    writeln!(string, "srt_connections_active {}", iter.len()).unwrap();
+    // let guard = state.pool.iter();
+    // let iter = guard.iter();
+    // writeln!(string, "srt_connections_active {}", iter.len()).unwrap();
 
-    for conn in iter {
-        let metrics = &conn.metrics;
-        let id = conn.id.socket_id.0;
-        writeln!(
-            string,
-            "srt_connection_packets_sent{{id=\"{}\"}} {}",
-            id, metrics.packets_sent
-        )
-        .unwrap();
+    // for conn in iter {
+    //     let metrics = &conn.metrics;
+    //     let id = conn.id.socket_id.0;
+    //     writeln!(
+    //         string,
+    //         "srt_connection_packets_sent{{id=\"{}\"}} {}",
+    //         id, metrics.packets_sent
+    //     )
+    //     .unwrap();
 
-        writeln!(
-            string,
-            "srt_connection_bytes_sent{{id=\"{}\"}} {}",
-            id, metrics.bytes_sent
-        )
-        .unwrap();
+    //     writeln!(
+    //         string,
+    //         "srt_connection_bytes_sent{{id=\"{}\"}} {}",
+    //         id, metrics.bytes_sent
+    //     )
+    //     .unwrap();
 
-        writeln!(
-            string,
-            "srt_connection_packets_recv{{id=\"{}\"}} {}",
-            id, metrics.packets_recv
-        )
-        .unwrap();
+    //     writeln!(
+    //         string,
+    //         "srt_connection_packets_recv{{id=\"{}\"}} {}",
+    //         id, metrics.packets_recv
+    //     )
+    //     .unwrap();
 
-        writeln!(
-            string,
-            "srt_connection_bytes_recv{{id=\"{}\"}} {}",
-            id, metrics.bytes_recv
-        )
-        .unwrap();
+    //     writeln!(
+    //         string,
+    //         "srt_connection_bytes_recv{{id=\"{}\"}} {}",
+    //         id, metrics.bytes_recv
+    //     )
+    //     .unwrap();
 
-        writeln!(
-            string,
-            "srt_connection_packets_lost{{id=\"{}\"}} {}",
-            id, metrics.packets_dropped
-        )
-        .unwrap();
-    }
+    //     writeln!(
+    //         string,
+    //         "srt_connection_packets_lost{{id=\"{}\"}} {}",
+    //         id, metrics.packets_dropped
+    //     )
+    //     .unwrap();
+    // }
 
     Response::builder()
         .status(200)

@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::collections::HashSet;
+use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::ops::Deref;
@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use futures::StreamExt;
+use parking_lot::RwLock;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use tokio::net::UdpSocket;
@@ -22,8 +23,9 @@ use super::config::Config;
 use super::conn::AckQueue;
 use super::metrics::ConnectionMetrics;
 use super::sink::OutputSink;
-use super::{DataPacket, Header, IsPacket};
+use super::{DataPacket, Header, IsPacket, Packet};
 
+#[derive(Debug)]
 pub struct State<S>
 where
     S: SessionManager,
@@ -93,74 +95,45 @@ where
 
 #[derive(Debug)]
 pub struct ConnectionPool {
-    inner: Mutex<AHashSet<Arc<Connection>>>,
+    inner: RwLock<AHashMap<ConnectionId, mpsc::Sender<Packet>>>,
 }
 
 impl ConnectionPool {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::default(),
+            inner: RwLock::default(),
         }
     }
 
-    pub fn insert(&self, conn: Connection) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.insert(Arc::new(conn));
+    pub fn insert(&self, id: ConnectionId, tx: mpsc::Sender<Packet>) {
+        let mut inner = self.inner.write();
+        inner.insert(id, tx);
     }
 
     pub fn remove<T>(&self, conn: T)
     where
         T: Borrow<ConnectionId>,
     {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write();
         inner.remove(conn.borrow());
     }
 
-    pub fn get<T>(&self, conn: T) -> Option<Arc<Connection>>
+    pub fn get<T>(&self, conn: T) -> Option<mpsc::Sender<Packet>>
     where
         T: Borrow<ConnectionId>,
     {
-        self.inner.lock().unwrap().get(conn.borrow()).cloned()
-    }
-
-    pub fn iter<'a>(&'a self) -> MutexGuard<'a, AHashSet<Arc<Connection>>> {
-        self.inner.lock().unwrap()
-    }
-
-    pub async fn clean(&self) -> usize {
-        let removed = {
-            let mut inner = self.inner.lock().unwrap();
-
-            let mut removed = Vec::new();
-            inner.retain(|conn| {
-                if conn.last_packet_time.lock().unwrap().elapsed() > Duration::from_secs(15) {
-                    removed.push(conn.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-
-            removed
-        };
-
-        let num_removed = removed.len();
-        for conn in removed.into_iter() {
-            conn.close();
-        }
-
-        num_removed
+        self.inner.read().get(conn.borrow()).cloned()
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().len()
+        self.inner.read().len()
     }
 
-    pub fn find_client_id(&self, addr: SocketAddr, socket_id: u32) -> Option<Arc<Connection>> {
-        let inner = self.inner.lock().unwrap();
+    pub fn find_client_id(&self, addr: SocketAddr, socket_id: u32) -> Option<mpsc::Sender<Packet>> {
+        let inner = self.inner.read();
 
-        for conn in &*inner {
-            if conn.id.addr == addr && conn.client_socket_id == socket_id {
+        for (id, conn) in &*inner {
+            if id.addr == addr && id.client_socket_id == socket_id {
                 return Some(conn.clone());
             }
         }
@@ -241,44 +214,6 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new<T, U>(addr: SocketAddr, server_socket_id: T, client_socket_id: U) -> Self
-    where
-        T: Into<SocketId>,
-        U: Into<SocketId>,
-    {
-        let server_socket_id = server_socket_id.into();
-
-        // This is about a 1.5MB backlog with an MTU of 1500.
-        let (tx, rx) = mpsc::channel(1024);
-
-        Self {
-            id: ConnectionId {
-                addr,
-                socket_id: server_socket_id,
-            },
-            start_time: Instant::now(),
-            server_socket_id: server_socket_id.into(),
-            client_socket_id: client_socket_id.into(),
-            client_sequence_number: AtomicU32::new(0),
-            server_sequence_number: AtomicU32::new(0),
-            rtt: Rtt::new(),
-            state: ConnectionState::new(),
-            syn_cookie: AtomicU32::new(0),
-            inflight_acks: Mutex::new(AckQueue::new()),
-            mode: Mutex::default(),
-            last_packet_time: Mutex::new(Instant::now()),
-            packets_recv: AtomicU32::new(0),
-            bytes_recv: AtomicU32::new(0),
-            metrics: ConnectionMetrics::new(),
-            lost_packets: Mutex::default(),
-            shutdown: Notify::new(),
-            tx,
-            rx: Mutex::new(Some(rx)),
-            buffers_avail: AtomicU32::new(8192),
-            buffers_waker: Notify::new(),
-        }
-    }
-
     pub fn timestamp(&self) -> u32 {
         Instant::now().duration_since(self.start_time).as_micros() as u32
     }
@@ -297,26 +232,6 @@ impl Connection {
 
     pub fn close(&self) {
         self.shutdown.notify_one();
-    }
-
-    pub fn spawn_publish<S>(self: &Arc<Self>, state: &State<S>, resource_id: Option<ResourceId>)
-    where
-        S: SessionManager,
-    {
-        let mut rx = self.rx.lock().unwrap().take().unwrap();
-
-        let sink = match state.session_manager.publish(resource_id) {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-
-        let mut sink = OutputSink::<S>::new(Arc::downgrade(self), sink);
-
-        tokio::task::spawn(async move {
-            while let Some(packet) = rx.recv().await {
-                let _ = sink.push(packet).await;
-            }
-        });
     }
 
     pub fn spawn_request<S>(
@@ -527,7 +442,18 @@ impl Default for Rtt {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConnectionId {
     pub addr: SocketAddr,
-    pub socket_id: SocketId,
+    pub server_socket_id: SocketId,
+    pub client_socket_id: SocketId,
+}
+
+impl Display for ConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "[{}]:{}:{}",
+            self.addr, self.server_socket_id.0, self.client_socket_id.0
+        )
+    }
 }
 
 pub enum Signal {

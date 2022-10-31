@@ -1,3 +1,5 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
 use srt::config::Config;
 
@@ -10,6 +12,7 @@ mod rtp;
 mod session;
 mod srt;
 mod state;
+mod utils;
 
 #[tokio::main]
 async fn main() {

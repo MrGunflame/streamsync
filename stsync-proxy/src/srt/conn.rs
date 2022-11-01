@@ -19,6 +19,7 @@ use crate::session::{LiveStream, SessionManager};
 use crate::srt::proto::Nak;
 use crate::utils::Shared;
 
+use super::metrics::ConnectionMetrics;
 use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
 use super::sink::OutputSink;
 use super::state::{ConnectionId, State};
@@ -41,6 +42,7 @@ where
 {
     pub id: ConnectionId,
     pub state: Shared<State<S>>,
+    pub metrics: Arc<ConnectionMetrics>,
 
     pub incoming: mpsc::Receiver<Packet>,
     pub socket: Arc<UdpSocket>,
@@ -193,70 +195,82 @@ where
         self.last_time = Instant::now();
 
         match packet.header.packet_type() {
-            PacketType::Data => match packet.downcast() {
-                Ok(packet) => self.handle_data(packet).await,
-                Err(err) => {
-                    tracing::debug!("Failed to downcast packet: {}", err);
-                    Ok(())
+            PacketType::Data => {
+                // Update connection metrics.
+                self.metrics.data_packets_recv.inc();
+                self.metrics.data_bytes_recv.add(packet.size());
+
+                match packet.downcast() {
+                    Ok(packet) => self.handle_data(packet).await,
+                    Err(err) => {
+                        tracing::debug!("Failed to downcast packet: {}", err);
+                        Ok(())
+                    }
                 }
-            },
-            PacketType::Control => match packet.header.as_control_unchecked().control_type() {
-                ControlPacketType::Handshake => match packet.downcast() {
-                    Ok(packet) => self.handle_handshake(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
+            }
+            PacketType::Control => {
+                // Update connection metrics.
+                self.metrics.ctrl_packets_recv.inc();
+                self.metrics.ctrl_bytes_recv.add(packet.size());
+
+                match packet.header.as_control_unchecked().control_type() {
+                    ControlPacketType::Handshake => match packet.downcast() {
+                        Ok(packet) => self.handle_handshake(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::Keepalive => match packet.downcast() {
+                        Ok(packet) => self.handle_keepalive(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::Ack => match packet.downcast() {
+                        Ok(packet) => self.handle_ack(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::Nak => match packet.downcast() {
+                        Ok(packet) => self.handle_nak(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::CongestionWarning => {
+                        tracing::warn!("Unhandled CongestionWarning");
                         Ok(())
                     }
-                },
-                ControlPacketType::Keepalive => match packet.downcast() {
-                    Ok(packet) => self.handle_keepalive(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
+                    ControlPacketType::Shutdown => match packet.downcast() {
+                        Ok(packet) => self.handle_shutdown(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::AckAck => match packet.downcast() {
+                        Ok(packet) => self.handle_ackack(packet).await,
+                        Err(err) => {
+                            tracing::debug!("Failed to downcast packet: {}", err);
+                            Ok(())
+                        }
+                    },
+                    ControlPacketType::DropReq => {
+                        tracing::warn!("Unhandled DropReq");
                         Ok(())
                     }
-                },
-                ControlPacketType::Ack => match packet.downcast() {
-                    Ok(packet) => self.handle_ack(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
+                    ControlPacketType::PeerError => {
+                        tracing::warn!("Unhandled PeerError");
                         Ok(())
                     }
-                },
-                ControlPacketType::Nak => match packet.downcast() {
-                    Ok(packet) => self.handle_nak(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
-                        Ok(())
-                    }
-                },
-                ControlPacketType::CongestionWarning => {
-                    tracing::warn!("Unhandled CongestionWarning");
-                    Ok(())
+                    ControlPacketType::UserDefined => Ok(()),
                 }
-                ControlPacketType::Shutdown => match packet.downcast() {
-                    Ok(packet) => self.handle_shutdown(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
-                        Ok(())
-                    }
-                },
-                ControlPacketType::AckAck => match packet.downcast() {
-                    Ok(packet) => self.handle_ackack(packet).await,
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
-                        Ok(())
-                    }
-                },
-                ControlPacketType::DropReq => {
-                    tracing::warn!("Unhandled DropReq");
-                    Ok(())
-                }
-                ControlPacketType::PeerError => {
-                    tracing::warn!("Unhandled PeerError");
-                    Ok(())
-                }
-                ControlPacketType::UserDefined => Ok(()),
-            },
+            }
         }
     }
 
@@ -271,6 +285,9 @@ where
             .estimated_link_capacity(5000)
             .receiving_rate(5000)
             .build();
+
+        self.inflight_acks
+            .push_back(self.server_sequence_number, Instant::now());
 
         self.send(packet).await
     }
@@ -308,6 +325,17 @@ where
         packet.header.timestamp = self.timestamp();
         packet.header.destination_socket_id = self.id.client_socket_id.0;
 
+        match packet.header.packet_type() {
+            PacketType::Data => {
+                self.metrics.data_packets_sent.inc();
+                self.metrics.data_bytes_sent.add(packet.size());
+            }
+            PacketType::Control => {
+                self.metrics.ctrl_packets_sent.inc();
+                self.metrics.ctrl_bytes_sent.add(packet.size());
+            }
+        }
+
         let buf = packet.encode_to_vec()?;
         self.socket.send_to(&buf, self.id.addr).await?;
         Ok(())
@@ -319,7 +347,11 @@ where
             let _ = sink.close().await;
         }
 
-        self.send(Shutdown::builder().build()).await
+        self.send(Shutdown::builder().build()).await?;
+
+        close_metrics(self);
+
+        Ok(())
     }
 
     pub async fn handle_data(&mut self, packet: DataPacket) -> Result<(), Error> {
@@ -368,6 +400,9 @@ where
     pub async fn handle_ack(&mut self, packet: Ack) -> Result<(), Error> {
         // We only accpet ACK packets when the peer requests a stream.
         if let ConnectionMode::Request { .. } = self.mode {
+            self.rtt.rtt = packet.rtt;
+            self.rtt.rtt_variance = packet.rtt_variance;
+
             // Reply with an ACKACK.
             let packet = AckAck::builder()
                 .acknowledgement_number(packet.acknowledgement_number())
@@ -696,6 +731,33 @@ pub enum PollState {
     Read,
     Write(Pin<Box<dyn Future<Output = ()>>>),
     Close(Pin<Box<dyn Future<Output = Result<(), Error>>>>),
+}
+
+pub fn close_metrics<S: SessionManager>(conn: &Connection<S>) {
+    let m = &conn.metrics;
+
+    tracing::info!(
+        "
+    | CTRL SENT | CTRL RECV | CTRL LOST | DATA SENT | DATA RECV | DATA LOST | RTT |
+    | --------- | --------- | --------- | --------- | --------- | --------- | --- |
+    | {}        | {}        | {}        | {}        | {}        | {}        | {}  |
+    | {}        | {}        | {}        | {}        | {}        | {}        | {}  |
+    ",
+        m.ctrl_packets_sent,
+        m.ctrl_packets_recv,
+        m.ctrl_packets_lost,
+        m.data_packets_sent,
+        m.data_packets_recv,
+        m.data_packets_lost,
+        conn.rtt.rtt,
+        m.ctrl_bytes_sent,
+        m.ctrl_bytes_recv,
+        m.ctrl_bytes_lost,
+        m.data_bytes_sent,
+        m.data_bytes_recv,
+        m.data_bytes_lost,
+        conn.rtt.rtt_variance,
+    );
 }
 
 #[cfg(test)]

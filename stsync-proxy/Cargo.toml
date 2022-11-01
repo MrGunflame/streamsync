@@ -17,6 +17,7 @@ bytes = "1.2.1"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
 hyper = { version = "0.14.20", features = ["http1", "http2", "server"] }
 ahash = "0.8.0"
+parking_lot = "0.12.1"
 
 [profile.release]
 opt-level = 3

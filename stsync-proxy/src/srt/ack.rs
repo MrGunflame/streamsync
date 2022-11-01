@@ -53,7 +53,7 @@ where
     // Calculate the RTT since the last ACK. We need to be careful not to underflow if the client
     // sends a bad timestamp.
     let mut time_sent = None;
-    let mut inflight_acks = stream.conn.inflight_acks.lock().unwrap();
+    let mut inflight_acks = stream.conn.inflight_acks.lock();
     while let Some((seq, ts)) = inflight_acks.pop_front() {
         if packet.acknowledgement_number() == seq {
             time_sent = Some(ts);
@@ -101,13 +101,13 @@ pub async fn send_ack(stream: &SrtConnStream<'_>) -> Result<(), Error> {
     // }
 
     let ack = {
-        let mut inflight_acks = stream.conn.inflight_acks.lock().unwrap();
+        let mut inflight_acks = stream.conn.inflight_acks.lock();
 
         let (rtt, rtt_variance) = stream.conn.rtt.load();
 
-        let timespan = stream.conn.start_time.elapsed().as_secs().max(1) as usize;
-        let packet_recv_rate = stream.conn.metrics.packets_recv.load() / timespan;
-        let bytes_recv_rate = stream.conn.metrics.bytes_recv.load() / timespan;
+        // let timespan = stream.conn.start_time.elapsed().as_secs().max(1) as usize;
+        // let packet_recv_rate = stream.conn.metrics.packets_recv.load() / timespan;
+        // let bytes_recv_rate = stream.conn.metrics.bytes_recv.load() / timespan;
 
         let client_seqnum = stream.conn.client_sequence_number.load(Ordering::Acquire);
 
@@ -116,9 +116,9 @@ pub async fn send_ack(stream: &SrtConnStream<'_>) -> Result<(), Error> {
             .rtt(rtt)
             .rtt_variance(rtt_variance)
             .avaliable_buffer_size(5000)
-            .packets_receiving_rate(packet_recv_rate as u32)
-            .estimated_link_capacity(packet_recv_rate as u32)
-            .receiving_rate(bytes_recv_rate as u32)
+            // .packets_receiving_rate(packet_recv_rate as u32)
+            // .estimated_link_capacity(packet_recv_rate as u32)
+            // .receiving_rate(bytes_recv_rate as u32)
             .build();
 
         let server_sequence_number = stream

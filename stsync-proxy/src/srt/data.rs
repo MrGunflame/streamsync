@@ -22,11 +22,11 @@ where
     // Lost a packet.
     if client_sequence_number != seqnum {
         // Append the lost sequence number.
-        let mut lost_packets = stream.conn.lost_packets.lock().unwrap();
+        let mut lost_packets = stream.conn.lost_packets.lock();
         lost_packets.push(client_sequence_number);
     }
 
-    let mut lost_packets = stream.conn.lost_packets.lock().unwrap();
+    let mut lost_packets = stream.conn.lost_packets.lock();
     lost_packets.retain(|seq| *seq != seqnum);
 
     stream

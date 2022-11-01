@@ -12,8 +12,6 @@ where
 {
     tracing::debug!("Shutting down conn {}", stream.conn.server_socket_id.0);
 
-    super::server::close_metrics(&stream.conn);
-
     stream.conn.close();
     state.pool.remove(stream.conn);
     Ok(())

@@ -14,7 +14,7 @@ where
     stream
         .conn
         .metrics
-        .packets_dropped
+        .data_packets_lost
         .add(packet.lost_packet_sequence_numbers.len() as usize);
 
     // We drop all NAKs for now.

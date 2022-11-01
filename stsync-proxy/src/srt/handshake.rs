@@ -3,6 +3,7 @@
 //! Currently only the Caller-Listener handshake process is supported.
 //!
 //! See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3
+use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::mpsc;
@@ -14,6 +15,7 @@ use super::IsPacket;
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::session::SessionManager;
 use crate::srt::conn::{AckQueue, PollState, Rtt, TickInterval};
+use crate::srt::metrics::ConnectionMetrics;
 use crate::srt::state::ConnectionId;
 use crate::srt::ExtensionField;
 
@@ -95,6 +97,9 @@ where
         client_socket_id: client_socket_id.into(),
     };
 
+    let metrics = Arc::new(ConnectionMetrics::new());
+    state.metrics.lock().insert(id, metrics.clone());
+
     let conn = Connection {
         id,
         incoming: rx,
@@ -111,6 +116,7 @@ where
         socket: stream.socket.clone(),
         last_time: Instant::now(),
         poll_state: PollState::default(),
+        metrics,
     };
 
     tokio::task::spawn(async move {

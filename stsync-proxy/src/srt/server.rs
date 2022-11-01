@@ -203,9 +203,6 @@ impl<'a> SrtConnStream<'a> {
         packet.header.timestamp = self.conn.timestamp();
         packet.header.destination_socket_id = self.conn.client_socket_id.0;
 
-        self.conn.metrics.packets_sent.add(1);
-        self.conn.metrics.bytes_sent.add(packet.size());
-
         self.stream.send(packet).await
     }
 }
@@ -214,24 +211,4 @@ async fn keepalive(_packet: Keepalive, stream: SrtConnStream<'_>) -> Result<(), 
     let resp = Keepalive::builder().build();
     stream.send(resp).await?;
     Ok(())
-}
-
-pub fn close_metrics(conn: &Connection) {
-    tracing::info!("Connection to {} closed", conn.id.addr);
-    tracing::info!(
-        "Connection metrics:\n
-        |  SENT  | RECV | DROP | RTT |\n
-        | ------ | ---- | ---- | --- |\n
-        | {}     | {}   | {}   | {}us |\n
-        | {}     | {}   | {} (ESTIMATE)    | {}us |\n
-        ",
-        conn.metrics.packets_sent,
-        conn.metrics.packets_recv,
-        conn.metrics.packets_dropped,
-        conn.rtt.load().0,
-        conn.metrics.bytes_sent,
-        conn.metrics.bytes_recv,
-        conn.metrics.packets_dropped.load() * 1500,
-        conn.rtt.load().1,
-    );
 }

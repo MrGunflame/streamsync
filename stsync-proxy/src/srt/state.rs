@@ -4,12 +4,12 @@ use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ahash::{AHashMap, AHashSet};
 use futures::StreamExt;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use tokio::net::UdpSocket;
@@ -44,6 +44,7 @@ where
                 pool: ConnectionPool::new(),
                 prng: Mutex::new(OsRng),
                 session_manager,
+                metrics: Mutex::new(AHashMap::new()),
             }),
         }
     }
@@ -82,6 +83,7 @@ where
     // NOTE: This actually is a CSPRNG but it doesn't have to be.
     pub prng: Mutex<OsRng>,
     pub session_manager: S,
+    pub metrics: Mutex<AHashMap<ConnectionId, Arc<ConnectionMetrics>>>,
 }
 
 impl<S> StateInner<S>
@@ -89,7 +91,7 @@ where
     S: SessionManager,
 {
     pub fn random(&self) -> u32 {
-        self.prng.lock().unwrap().next_u32() >> 1
+        self.prng.lock().next_u32() >> 1
     }
 }
 
@@ -139,29 +141,6 @@ impl ConnectionPool {
         }
 
         None
-    }
-}
-
-#[derive(Debug)]
-pub struct ConnectionPoolIter<'a> {
-    pool: MutexGuard<'a, std::collections::hash_map::Values<'a, ConnectionId, Arc<Connection>>>,
-}
-
-impl<'a> Iterator for ConnectionPoolIter<'a> {
-    type Item = &'a Connection;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pool.next().map(|ptr| Arc::deref(ptr))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.pool.len(), Some(self.pool.len()))
-    }
-}
-
-impl<'a> ExactSizeIterator for ConnectionPoolIter<'a> {
-    fn len(&self) -> usize {
-        self.pool.len()
     }
 }
 

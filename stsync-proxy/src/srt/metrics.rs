@@ -3,21 +3,35 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
 pub struct ConnectionMetrics {
-    pub packets_dropped: Counter,
-    pub packets_sent: Counter,
-    pub bytes_sent: Counter,
-    pub packets_recv: Counter,
-    pub bytes_recv: Counter,
+    pub ctrl_packets_sent: Counter,
+    pub ctrl_packets_recv: Counter,
+    pub ctrl_packets_lost: Counter,
+    pub ctrl_bytes_sent: Counter,
+    pub ctrl_bytes_recv: Counter,
+    pub ctrl_bytes_lost: Counter,
+    pub data_packets_sent: Counter,
+    pub data_packets_recv: Counter,
+    pub data_packets_lost: Counter,
+    pub data_bytes_sent: Counter,
+    pub data_bytes_recv: Counter,
+    pub data_bytes_lost: Counter,
 }
 
 impl ConnectionMetrics {
     pub const fn new() -> Self {
         Self {
-            packets_dropped: Counter::new(),
-            packets_sent: Counter::new(),
-            bytes_sent: Counter::new(),
-            packets_recv: Counter::new(),
-            bytes_recv: Counter::new(),
+            ctrl_packets_sent: Counter::new(),
+            ctrl_packets_recv: Counter::new(),
+            ctrl_packets_lost: Counter::new(),
+            ctrl_bytes_sent: Counter::new(),
+            ctrl_bytes_recv: Counter::new(),
+            ctrl_bytes_lost: Counter::new(),
+            data_packets_sent: Counter::new(),
+            data_packets_recv: Counter::new(),
+            data_packets_lost: Counter::new(),
+            data_bytes_sent: Counter::new(),
+            data_bytes_recv: Counter::new(),
+            data_bytes_lost: Counter::new(),
         }
     }
 }

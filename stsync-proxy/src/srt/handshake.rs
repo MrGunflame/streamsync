@@ -117,6 +117,8 @@ where
         last_time: Instant::now(),
         poll_state: PollState::default(),
         metrics,
+        mtu: 1500,
+        loss_list: Default::default(),
     };
 
     tokio::task::spawn(async move {

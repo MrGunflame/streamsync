@@ -59,6 +59,7 @@ where
     pub mode: ConnectionMode<S>,
 
     pub inflight_acks: AckQueue,
+    pub loss_list: LossList,
     pub rtt: Rtt,
 
     pub tick_interval: TickInterval,
@@ -68,6 +69,10 @@ where
 
     /// Self-referential struct.
     pub poll_state: PollState,
+
+    /// Maximum transmission unit, the maximum size for an Ethernet frame. The default is 1500,
+    /// which is the maximum size for an Ethernet frame.
+    pub mtu: u16,
 }
 
 impl<S> Connection<S>
@@ -275,15 +280,34 @@ where
     }
 
     pub async fn send_ack(&mut self) -> Result<(), Error> {
+        // Purge all lost packets.
+        let packets_lost = self.loss_list.clear(self.rtt);
+        self.metrics.data_packets_lost.add(packets_lost);
+        self.metrics
+            .data_bytes_lost
+            .add(packets_lost * self.mtu as usize);
+
+        let timespan = self.start_time.elapsed().as_secs() as u32;
+
+        let packets_recv_rate;
+        let bytes_recv_rate;
+        if timespan == 0 {
+            packets_recv_rate = 0;
+            bytes_recv_rate = 0;
+        } else {
+            packets_recv_rate = self.metrics.data_packets_recv.load() as u32 / timespan;
+            bytes_recv_rate = self.metrics.data_bytes_recv.load() as u32 / timespan;
+        }
+
         let packet = Ack::builder()
             .acknowledgement_number(self.server_sequence_number)
             .last_acknowledged_packet_sequence_number(self.client_sequence_number)
             .rtt(self.rtt.rtt)
             .rtt_variance(self.rtt.rtt_variance)
             .avaliable_buffer_size(5000)
-            .packets_receiving_rate(5000)
-            .estimated_link_capacity(5000)
-            .receiving_rate(5000)
+            .packets_receiving_rate(packets_recv_rate)
+            .estimated_link_capacity(packets_recv_rate)
+            .receiving_rate(bytes_recv_rate)
             .build();
 
         self.inflight_acks
@@ -317,6 +341,7 @@ where
         self.send(packet).await
     }
 
+    /// Sends a packet to the peer.
     pub async fn send<T>(&self, packet: T) -> Result<(), Error>
     where
         T: IsPacket,
@@ -365,11 +390,15 @@ where
 
         let _ = tx.push(packet).await;
 
-        if self.client_sequence_number != seqnum {
-            // TODO: LOST PACKET
+        // If the sequence number of the packet is not the next expected sequence number
+        // and is not already a lost sequence number we lost all sequences up to the
+        // received sequence. We move the sequence counter forward accordingly and register
+        // all missing sequence numbers in case they are being received later out-of-order.
+        if self.client_sequence_number != seqnum && !self.loss_list.remove(seqnum) {
+            self.loss_list.extend(self.client_sequence_number..seqnum);
         }
 
-        self.client_sequence_number += 1;
+        self.client_sequence_number = seqnum + 1;
 
         Ok(())
     }
@@ -644,6 +673,106 @@ impl AckQueue {
     }
 }
 
+/// A list to keep track of lost packets. Internally a `LossList` is a stack with all sequence
+/// numbers sorted in ascending order. This sorting is not done automatically, it is only possible
+/// to push new sequence numbers that are greater than the last one.
+#[derive(Clone, Debug, Default)]
+pub struct LossList {
+    inner: Vec<(u32, Instant)>,
+}
+
+impl LossList {
+    pub const fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    /// Returns the number of sequence numbers in the `LossList`.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Returns `true` if the `LossList` is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Pushes a new lost sequence number onto the stack. The pushed sequence `seq` must be bigger
+    /// than the last pushed sequence number on the stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `debug_assertions` is enabled and the pushed sequence number `seq` is smaller
+    /// than the last pushed sequence number on the stack.
+    pub fn push(&mut self, seq: u32) {
+        self.push_in(seq, Instant::now())
+    }
+
+    /// Clears all sequence numbers that should be considered lost from the stack. Returns the
+    /// number of removed sequence numbers. [`Rtt`] is used to determine whether a sequence number
+    /// is likely still inflight, or should be considered lost.
+    pub fn clear(&mut self, rtt: Rtt) -> usize {
+        self.clear_in(rtt, Instant::now())
+    }
+
+    /// Removes a sequence number from the `LossList`. Returns `true` if the sequence was removed.
+    pub fn remove(&mut self, seq: u32) -> bool {
+        if let Ok(index) = self.inner.binary_search_by(|(n, _)| n.cmp(&seq)) {
+            self.inner.remove(index);
+            return true;
+        }
+
+        false
+    }
+
+    fn push_in(&mut self, seq: u32, now: Instant) {
+        #[cfg(debug_assertions)]
+        if let Some((n, _)) = self.inner.last() {
+            if seq <= *n {
+                panic!("Tried to push {} to LossList with last sequence {}", seq, n);
+            }
+        }
+
+        self.inner.push((seq, now));
+    }
+
+    fn clear_in(&mut self, rtt: Rtt, now: Instant) -> usize {
+        // TODO: A binary search could also be benefitial here.
+        let mut num_removed = 0;
+        while !self.is_empty() {
+            let (_, ts) = unsafe { self.inner.get_unchecked(0) };
+
+            let diff = (now - *ts).as_micros() as u32;
+            if diff < rtt.rtt * 2 {
+                return num_removed;
+            }
+
+            self.inner.remove(0);
+            num_removed += 1;
+        }
+
+        num_removed
+    }
+}
+
+impl Extend<u32> for LossList {
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = u32>,
+    {
+        let iter = iter.into_iter();
+
+        if let Some(len) = iter.size_hint().1 {
+            self.inner.reserve(len);
+        }
+
+        for seq in iter {
+            self.push_in(seq, Instant::now());
+        }
+    }
+}
+
 pub enum ConnectionMode<S>
 where
     S: SessionManager,
@@ -762,7 +891,9 @@ pub fn close_metrics<S: SessionManager>(conn: &Connection<S>) {
 
 #[cfg(test)]
 mod tests {
-    use super::Rtt;
+    use std::time::{Duration, Instant};
+
+    use super::{LossList, Rtt};
 
     #[test]
     fn test_rtt() {
@@ -778,5 +909,24 @@ mod tests {
         rtt.update(0);
         assert_eq!(rtt.rtt, 87_500);
         assert_eq!(rtt.rtt_variance, 62_500);
+    }
+
+    #[test]
+    fn test_loss_list() {
+        let now = Instant::now();
+
+        let mut list = LossList::new();
+        list.push_in(1, now);
+        list.push_in(2, now + Duration::new(1, 0));
+        list.push_in(3, now + Duration::new(2, 0));
+        assert_eq!(list.len(), 3);
+
+        let rtt = Rtt::new();
+        assert_eq!(list.clear_in(rtt, now), 0);
+        assert_eq!(list.len(), 3);
+        assert_eq!(list.clear_in(rtt, now + Duration::from_millis(500)), 1);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.clear_in(rtt, now + Duration::from_secs(5)), 2);
+        assert_eq!(list.len(), 0);
     }
 }

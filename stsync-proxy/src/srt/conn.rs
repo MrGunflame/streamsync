@@ -9,7 +9,8 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::sink::{Close, Feed};
+use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
@@ -23,10 +24,13 @@ use super::metrics::ConnectionMetrics;
 use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
 use super::sink::OutputSink;
 use super::state::{ConnectionId, State};
+use super::stream::SrtStream;
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
     HandshakePacket, IsPacket, Packet, PacketPosition, PacketType,
 };
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// A `Connection` is a single future representing a logical SRT stream.
 ///
@@ -68,18 +72,24 @@ where
     pub last_time: Instant,
 
     /// Self-referential struct.
-    pub poll_state: PollState,
+    pub poll_state: PollState<S>,
 
     /// Maximum transmission unit, the maximum size for an Ethernet frame. The default is 1500,
     /// which is the maximum size for an Ethernet frame.
     pub mtu: u16,
+
+    pub queue: TransmissionQueue,
 }
 
 impl<S> Connection<S>
 where
     S: SessionManager,
 {
+    /// Returns a reference to the [`State`] that owns this `Connection`.
+    #[inline]
     pub fn state(&self) -> &State<S> {
+        // SAFETY: When a `Connection` is created the caller guarantees that the provided
+        // `&State<S>` reference outlives the `Connection` instance.
         unsafe { self.state.as_ref() }
     }
 
@@ -87,89 +97,72 @@ where
         self.start_time.elapsed().as_micros() as u32
     }
 
-    pub fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    pub fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        tracing::trace!("Connection.poll_read");
+
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Read));
 
-        let mut timeout = tokio::time::sleep_until((self.last_time + Duration::new(5, 0)).into());
-        let timeout = unsafe { Pin::new_unchecked(&mut timeout) };
+        // Empty the sending queue before doing anything else.
+        if let Some(packet) = self.queue.pop() {
+            let socket = self.socket.clone();
+            let addr = self.id.addr;
+            let fut = Box::pin(async move {
+                let buf = packet.encode_to_vec()?;
+                socket.send_to(&buf, addr).await?;
+                Ok(())
+            });
+
+            self.poll_state = PollState::Write(fut);
+
+            // Immediately move into write state.
+            return Poll::Ready(Ok(()));
+        }
 
         match self.incoming.poll_recv(cx) {
-            Poll::Pending => match timeout.poll(cx) {
-                Poll::Pending => match &mut self.mode {
-                    ConnectionMode::Request { stream, .. } => match stream.poll_next_unpin(cx) {
-                        Poll::Pending => Poll::Pending,
-                        Poll::Ready(Some(buf)) => {
-                            let this: &'static mut Self =
-                                unsafe { std::mem::transmute(self.as_mut()) };
-
-                            let fut = Box::pin(async move {
-                                this.send_bytes(buf).await;
-                            });
-
-                            self.poll_state = PollState::Write(fut);
-                            Poll::Ready(())
-                        }
-                        Poll::Ready(None) => {
-                            self.as_mut().init_close();
-                            Poll::Ready(())
-                        }
-                    },
-                    ConnectionMode::Publish(_) => {
-                        match Pin::new(&mut self.tick_interval).poll(cx) {
-                            Poll::Pending => Poll::Pending,
-                            Poll::Ready(()) => {
-                                let this: &'static mut Self =
-                                    unsafe { std::mem::transmute(self.as_mut()) };
-                                let fut = Box::pin(async move {
-                                    if let Err(err) = this.send_ack().await {
-                                        tracing::debug!("Failed to send ACK: {}", err);
-                                    }
-                                });
-
-                                self.poll_state = PollState::Write(fut);
-                                Poll::Ready(())
-                            }
-                        }
-                    }
-                    _ => Poll::Pending,
-                },
-                // Close the connection.
-                Poll::Ready(_) => {
-                    self.as_mut().init_close();
-                    Poll::Ready(())
-                }
-            },
             Poll::Ready(Some(packet)) => {
-                let this: &'static mut Self = unsafe { std::mem::transmute(self.as_mut()) };
-                let fut = Box::pin(async move {
-                    if let Err(err) = this.handle_packet(packet).await {
-                        tracing::debug!("Failed to handle packet: {}", err);
-                    }
-                });
-
-                self.poll_state = PollState::Write(fut);
-                Poll::Ready(())
+                self.handle_packet(packet)?;
+                return Poll::Ready(Ok(()));
             }
             Poll::Ready(None) => {
-                self.as_mut().init_close();
-                Poll::Ready(())
+                self.close()?;
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Pending => (),
+        }
+
+        match self.tick_interval.poll_unpin(cx) {
+            Poll::Ready(()) => {
+                self.tick()?;
+                // return Poll::Ready(Ok(()));
+            }
+            Poll::Pending => (),
+        }
+
+        if let ConnectionMode::Request { stream, .. } = &mut self.mode {
+            match stream.poll_next_unpin(cx) {
+                Poll::Ready(Some(buf)) => {
+                    println!("read");
+                    self.send_bytes(buf)?;
+                }
+                Poll::Ready(None) => {
+                    self.close()?;
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Pending => (),
             }
         }
+
+        Poll::Pending
     }
 
     fn init_read(&mut self) {
         self.poll_state = PollState::Read;
     }
 
-    fn init_close(mut self: Pin<&mut Self>) {
-        let this: &'static mut Self = unsafe { std::mem::transmute(self.as_mut()) };
-        let fut = Box::pin(async move { this.close().await });
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        tracing::trace!("Connection.poll_write");
 
-        self.poll_state = PollState::Close(fut);
-    }
-
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Write(_)));
 
@@ -178,24 +171,62 @@ where
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(()) => {
                     self.init_read();
-                    Poll::Ready(())
+                    Poll::Ready(Ok(()))
                 }
             },
             _ => unsafe { hint::unreachable_unchecked() },
         }
     }
 
-    pub fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_write_sink(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        tracing::trace!("Connection.poll_write_sink");
+
         #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::Close(_)));
+        assert!(matches!(self.poll_state, PollState::WriteSink(_)));
 
         match &mut self.poll_state {
-            PollState::Close(fut) => fut.as_mut().poll(cx).map(|_| ()),
+            PollState::WriteSink(fut) => {
+                pin_mut!(fut);
+
+                match fut.poll(cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(_) => {
+                        self.init_read();
+                        Poll::Ready(Ok(()))
+                    }
+                }
+            }
             _ => unsafe { hint::unreachable_unchecked() },
         }
     }
 
-    pub async fn handle_packet(&mut self, mut packet: Packet) -> Result<(), Error> {
+    pub fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        tracing::trace!("Connection.poll_close");
+
+        #[cfg(debug_assertions)]
+        assert!(matches!(self.poll_state, PollState::Close(_)));
+
+        // TODO: Drain the transmission queue, the assume the connection is dead.
+
+        match &mut self.poll_state {
+            PollState::Close(fut) => {
+                pin_mut!(fut);
+
+                match fut.poll(cx) {
+                    Poll::Pending => Poll::Pending,
+                    Poll::Ready(Err(err)) => Poll::Ready(Ok(())),
+                    Poll::Ready(Ok(())) => {
+                        tracing::debug!("Connection to {} closed", self.id);
+                        self.poll_state = PollState::Closed;
+                        Poll::Ready(Ok(()))
+                    }
+                }
+            }
+            _ => unsafe { hint::unreachable_unchecked() },
+        }
+    }
+
+    pub fn handle_packet(&mut self, mut packet: Packet) -> Result<()> {
         // Update connection stats.
         self.last_time = Instant::now();
 
@@ -206,7 +237,7 @@ where
                 self.metrics.data_bytes_recv.add(packet.size());
 
                 match packet.downcast() {
-                    Ok(packet) => self.handle_data(packet).await,
+                    Ok(packet) => self.handle_data(packet),
                     Err(err) => {
                         tracing::debug!("Failed to downcast packet: {}", err);
                         Ok(())
@@ -220,28 +251,28 @@ where
 
                 match packet.header.as_control_unchecked().control_type() {
                     ControlPacketType::Handshake => match packet.downcast() {
-                        Ok(packet) => self.handle_handshake(packet).await,
+                        Ok(packet) => self.handle_handshake(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Keepalive => match packet.downcast() {
-                        Ok(packet) => self.handle_keepalive(packet).await,
+                        Ok(packet) => self.handle_keepalive(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Ack => match packet.downcast() {
-                        Ok(packet) => self.handle_ack(packet).await,
+                        Ok(packet) => self.handle_ack(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Nak => match packet.downcast() {
-                        Ok(packet) => self.handle_nak(packet).await,
+                        Ok(packet) => self.handle_nak(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
@@ -252,14 +283,14 @@ where
                         Ok(())
                     }
                     ControlPacketType::Shutdown => match packet.downcast() {
-                        Ok(packet) => self.handle_shutdown(packet).await,
+                        Ok(packet) => self.handle_shutdown(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::AckAck => match packet.downcast() {
-                        Ok(packet) => self.handle_ackack(packet).await,
+                        Ok(packet) => self.handle_ackack(packet),
                         Err(err) => {
                             tracing::debug!("Failed to downcast packet: {}", err);
                             Ok(())
@@ -279,44 +310,54 @@ where
         }
     }
 
-    pub async fn send_ack(&mut self) -> Result<(), Error> {
-        // Purge all lost packets.
-        let packets_lost = self.loss_list.clear(self.rtt);
-        self.metrics.data_packets_lost.add(packets_lost);
-        self.metrics
-            .data_bytes_lost
-            .add(packets_lost * self.mtu as usize);
-
-        let timespan = self.start_time.elapsed().as_secs() as u32;
-
-        let packets_recv_rate;
-        let bytes_recv_rate;
-        if timespan == 0 {
-            packets_recv_rate = 0;
-            bytes_recv_rate = 0;
-        } else {
-            packets_recv_rate = self.metrics.data_packets_recv.load() as u32 / timespan;
-            bytes_recv_rate = self.metrics.data_bytes_recv.load() as u32 / timespan;
+    pub fn tick(&mut self) -> Result<()> {
+        // Drop the connection after 15s of no response from the peer.
+        if self.last_time.elapsed() >= Duration::from_secs(15) {
+            return self.close();
         }
 
-        let packet = Ack::builder()
-            .acknowledgement_number(self.server_sequence_number)
-            .last_acknowledged_packet_sequence_number(self.client_sequence_number)
-            .rtt(self.rtt.rtt)
-            .rtt_variance(self.rtt.rtt_variance)
-            .avaliable_buffer_size(5000)
-            .packets_receiving_rate(packets_recv_rate)
-            .estimated_link_capacity(packets_recv_rate)
-            .receiving_rate(bytes_recv_rate)
-            .build();
+        // Send ACKs to the peer in publish mode.
+        if self.mode.is_publish() {
+            // Purge all lost packets.
+            let packets_lost = self.loss_list.clear(self.rtt);
+            self.metrics.data_packets_lost.add(packets_lost);
+            self.metrics
+                .data_bytes_lost
+                .add(packets_lost * self.mtu as usize);
 
-        self.inflight_acks
-            .push_back(self.server_sequence_number, Instant::now());
+            let timespan = self.start_time.elapsed().as_secs() as u32;
 
-        self.send(packet).await
+            let packets_recv_rate;
+            let bytes_recv_rate;
+            if timespan == 0 {
+                packets_recv_rate = 0;
+                bytes_recv_rate = 0;
+            } else {
+                packets_recv_rate = self.metrics.data_packets_recv.load() as u32 / timespan;
+                bytes_recv_rate = self.metrics.data_bytes_recv.load() as u32 / timespan;
+            }
+
+            let packet = Ack::builder()
+                .acknowledgement_number(self.server_sequence_number)
+                .last_acknowledged_packet_sequence_number(self.client_sequence_number)
+                .rtt(self.rtt.rtt)
+                .rtt_variance(self.rtt.rtt_variance)
+                .avaliable_buffer_size(5000)
+                .packets_receiving_rate(5000)
+                .estimated_link_capacity(5000)
+                .receiving_rate(5000000)
+                .build();
+
+            self.inflight_acks
+                .push_back(self.server_sequence_number, Instant::now());
+
+            self.send(packet)?;
+        }
+
+        Ok(())
     }
 
-    pub async fn send_bytes(&mut self, bytes: Bytes) -> Result<(), Error> {
+    pub fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
         let message_number = match &mut self.mode {
             ConnectionMode::Request {
                 stream: _,
@@ -338,11 +379,11 @@ where
         self.server_sequence_number += 1;
         *message_number += 1;
 
-        self.send(packet).await
+        self.send(packet)
     }
 
     /// Sends a packet to the peer.
-    pub async fn send<T>(&self, packet: T) -> Result<(), Error>
+    pub fn send<T>(&mut self, packet: T) -> Result<()>
     where
         T: IsPacket,
     {
@@ -350,36 +391,35 @@ where
         packet.header.timestamp = self.timestamp();
         packet.header.destination_socket_id = self.id.client_socket_id.0;
 
-        match packet.header.packet_type() {
-            PacketType::Data => {
-                self.metrics.data_packets_sent.inc();
-                self.metrics.data_bytes_sent.add(packet.size());
-            }
-            PacketType::Control => {
-                self.metrics.ctrl_packets_sent.inc();
-                self.metrics.ctrl_bytes_sent.add(packet.size());
-            }
-        }
-
-        let buf = packet.encode_to_vec()?;
-        self.socket.send_to(&buf, self.id.addr).await?;
+        self.queue.push(packet);
         Ok(())
     }
 
     /// Closes the connection.
-    pub async fn close(&mut self) -> Result<(), Error> {
-        if let ConnectionMode::Publish(sink) = &mut self.mode {
-            let _ = sink.close().await;
-        }
+    pub fn close(&mut self) -> Result<()> {
+        self.send(Shutdown::builder().build())?;
 
-        self.send(Shutdown::builder().build()).await?;
+        if let ConnectionMode::Publish(sink) = &mut self.mode {
+            #[cfg(debug_assertions)]
+            assert!(matches!(self.poll_state, PollState::Read));
+
+            let fut = sink.close();
+            let fut = unsafe { std::mem::transmute(fut) };
+
+            self.poll_state = PollState::Close(fut);
+        } else {
+            self.poll_state = PollState::Closed;
+        }
 
         close_metrics(self);
 
         Ok(())
     }
 
-    pub async fn handle_data(&mut self, packet: DataPacket) -> Result<(), Error> {
+    pub fn handle_data(&mut self, packet: DataPacket) -> Result<()> {
+        #[cfg(debug_assertions)]
+        assert!(matches!(self.poll_state, PollState::Read));
+
         // Only handle data packets from peers that are publishing.
         let tx = match &mut self.mode {
             ConnectionMode::Publish(tx) => tx,
@@ -388,7 +428,9 @@ where
 
         let seqnum = packet.packet_sequence_number();
 
-        let _ = tx.push(packet).await;
+        let fut = tx.feed(packet);
+        let fut = unsafe { std::mem::transmute(fut) };
+        self.poll_state = PollState::WriteSink(fut);
 
         // If the sequence number of the packet is not the next expected sequence number
         // and is not already a lost sequence number we lost all sequences up to the
@@ -403,11 +445,11 @@ where
         Ok(())
     }
 
-    pub async fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<(), Error> {
-        self.close().await
+    pub fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<()> {
+        self.close()
     }
 
-    pub async fn handle_ackack(&mut self, packet: AckAck) -> Result<(), Error> {
+    pub fn handle_ackack(&mut self, packet: AckAck) -> Result<()> {
         while let Some((seq, ts)) = self.inflight_acks.pop_front() {
             if packet.acknowledgement_number() == seq {
                 let rtt = ts.elapsed().as_micros() as u32;
@@ -422,11 +464,11 @@ where
         Ok(())
     }
 
-    pub async fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<(), Error> {
-        self.send(Keepalive::builder().build()).await
+    pub fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<()> {
+        self.send(Keepalive::builder().build())
     }
 
-    pub async fn handle_ack(&mut self, packet: Ack) -> Result<(), Error> {
+    pub fn handle_ack(&mut self, packet: Ack) -> Result<()> {
         // We only accpet ACK packets when the peer requests a stream.
         if let ConnectionMode::Request { .. } = self.mode {
             self.rtt.rtt = packet.rtt;
@@ -437,13 +479,13 @@ where
                 .acknowledgement_number(packet.acknowledgement_number())
                 .build();
 
-            self.send(packet).await
+            self.send(packet)
         } else {
             Ok(())
         }
     }
 
-    pub async fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<(), Error> {
+    pub fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
         let syn_cookie = match self.mode {
             ConnectionMode::Induction { syn_cookie } => syn_cookie,
             _ => {
@@ -488,7 +530,7 @@ where
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
-            ext.sender_tsbpd_delay = self.start_time.elapsed().as_micros() as u16;
+            ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
 
             packet.extensions.0.push(HandshakeExtension {
                 extension_type: ExtensionType::HSRSP,
@@ -520,6 +562,8 @@ where
 
                         let stream = self.state().session_manager.request(id).unwrap();
 
+                        let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
+
                         self.mode = ConnectionMode::Request {
                             stream,
                             message_number: 1,
@@ -542,18 +586,62 @@ where
             }
         }
 
-        self.send(packet).await
+        self.send(packet)
     }
 
-    pub async fn handle_nak(&mut self, _packet: Nak) -> Result<(), Error> {
+    /// Handle an incoming [`Nak`] packet. This only responds if the connection is in [`Request`]
+    /// mode, otherwise it does nothing.
+    ///
+    /// [`Request`]: ConnectionMode::Request
+    pub fn handle_nak(&mut self, packet: Nak) -> Result<()> {
+        let timestamp = self.timestamp();
+
+        let stream = match &mut self.mode {
+            ConnectionMode::Request { stream, .. } => stream,
+            _ => return Ok(()),
+        };
+
+        for seq in packet.lost_packet_sequence_numbers.iter() {
+            match stream.get(seq).map(|buf| buf.to_vec()) {
+                Some(buf) => {
+                    // TODO: Keep track of message numbers.
+                    let mut packet = DataPacket::default();
+                    packet.header().set_packet_sequence_number(seq);
+                    packet.header().set_ordered(true);
+                    packet.header().set_retransmitted(true);
+                    packet.header().set_packet_position(PacketPosition::Full);
+                    packet.data = buf;
+
+                    let mut packet = packet.upcast();
+                    packet.header.timestamp = timestamp;
+                    packet.header.destination_socket_id = self.id.client_socket_id.0;
+
+                    self.queue.push_prio(packet);
+                }
+                None => {
+                    let dropreq = DropRequest::builder()
+                        .message_number(0)
+                        .first_packet_sequence_number(packet.lost_packet_sequence_numbers.first())
+                        .last_packet_sequence_number(packet.lost_packet_sequence_numbers.last())
+                        .build();
+
+                    let mut packet = dropreq.upcast();
+                    packet.header.timestamp = timestamp;
+                    packet.header.destination_socket_id = self.id.client_socket_id.0;
+
+                    self.queue.push(packet);
+                }
+            }
+        }
+
         Ok(())
     }
 
-    pub async fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<(), Error> {
+    pub async fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<()> {
         Ok(())
     }
 
-    pub async fn handle_peer_error(&mut self, _packet: Packet) -> Result<(), Error> {
+    pub async fn handle_peer_error(&mut self, _packet: Packet) -> Result<()> {
         Ok(())
     }
 }
@@ -562,23 +650,32 @@ impl<S> Future for Connection<S>
 where
     S: SessionManager,
 {
-    type Output = ();
+    type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         loop {
             match &self.poll_state {
                 PollState::Read => match self.as_mut().poll_read(cx) {
                     Poll::Pending => return Poll::Pending,
-                    Poll::Ready(()) => continue,
+                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                    _ => (),
                 },
                 PollState::Write(_) => match self.as_mut().poll_write(cx) {
                     Poll::Pending => return Poll::Pending,
-                    Poll::Ready(()) => continue,
+                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                    _ => (),
                 },
-                PollState::Close(_) => match self.poll_close(cx) {
+                PollState::WriteSink(_) => match self.as_mut().poll_write_sink(cx) {
                     Poll::Pending => return Poll::Pending,
-                    Poll::Ready(()) => return Poll::Ready(()),
+                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                    _ => (),
                 },
+                PollState::Close(_) => match self.as_mut().poll_close(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                    _ => (),
+                },
+                PollState::Closed => return Poll::Ready(Ok(())),
             }
         }
     }
@@ -767,8 +864,9 @@ impl Extend<u32> for LossList {
             self.inner.reserve(len);
         }
 
+        let now = Instant::now();
         for seq in iter {
-            self.push_in(seq, Instant::now());
+            self.push_in(seq, now);
         }
     }
 }
@@ -782,7 +880,7 @@ where
     },
     Publish(OutputSink<S>),
     Request {
-        stream: LiveStream<S::Stream>,
+        stream: SrtStream<LiveStream<S::Stream>>,
         message_number: u32,
     },
 }
@@ -791,6 +889,10 @@ impl<S> ConnectionMode<S>
 where
     S: SessionManager,
 {
+    pub fn is_publish(&self) -> bool {
+        matches!(self, Self::Publish(_))
+    }
+
     pub fn is_request(&self) -> bool {
         matches!(self, Self::Request { .. })
     }
@@ -854,12 +956,55 @@ impl Future for TickInterval {
     }
 }
 
-#[derive(Default)]
-pub enum PollState {
-    #[default]
+pub enum PollState<S>
+where
+    S: SessionManager,
+{
     Read,
-    Write(Pin<Box<dyn Future<Output = ()>>>),
-    Close(Pin<Box<dyn Future<Output = Result<(), Error>>>>),
+    Write(Pin<Box<dyn Future<Output = Result<()>>>>),
+    WriteSink(Feed<'static, OutputSink<S>, DataPacket>),
+    Close(Close<'static, OutputSink<S>, DataPacket>),
+    Closed,
+}
+
+impl<S> Default for PollState<S>
+where
+    S: SessionManager,
+{
+    #[inline]
+    fn default() -> Self {
+        Self::Read
+    }
+}
+
+/// A packet transmission queue.
+#[derive(Clone, Debug, Default)]
+pub struct TransmissionQueue {
+    queue: VecDeque<Packet>,
+    prio: VecDeque<Packet>,
+}
+
+impl TransmissionQueue {
+    /// Pushes a new [`Packet`] onto the default queue.
+    pub fn push(&mut self, packet: Packet) {
+        self.queue.push_back(packet);
+    }
+
+    /// Pushes a new [`Packet`] onto the priority queue.
+    pub fn push_prio(&mut self, packet: Packet) {
+        self.prio.push_back(packet);
+    }
+
+    pub fn pop(&mut self) -> Option<Packet> {
+        match self.prio.remove(0) {
+            Some(packet) => Some(packet),
+            None => self.queue.remove(0),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty() && self.prio.is_empty()
+    }
 }
 
 pub fn close_metrics<S: SessionManager>(conn: &Connection<S>) {

@@ -119,6 +119,7 @@ where
         metrics,
         mtu: 1500,
         loss_list: Default::default(),
+        queue: Default::default(),
     };
 
     tokio::task::spawn(async move {

@@ -2,6 +2,7 @@
 //!
 //! https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01
 mod ack;
+mod buffer;
 pub mod config;
 mod conn;
 mod data;
@@ -13,6 +14,7 @@ pub mod server;
 mod shutdown;
 mod sink;
 pub mod state;
+mod stream;
 
 use std::{
     collections::HashMap,

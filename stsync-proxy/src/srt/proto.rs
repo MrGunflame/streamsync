@@ -448,6 +448,19 @@ impl SequenceNumbers {
             Self::Range(range) => range.end() - range.start(),
         }
     }
+
+    pub fn iter(&self) -> SequenceNumbersIter {
+        match self {
+            Self::Single(num) => SequenceNumbersIter {
+                start: *num as usize,
+                end: *num as usize,
+            },
+            Self::Range(range) => SequenceNumbersIter {
+                start: (*range.start()) as usize,
+                end: (*range.end()) as usize,
+            },
+        }
+    }
 }
 
 impl Encode for SequenceNumbers {
@@ -504,6 +517,24 @@ impl Decode for SequenceNumbers {
     }
 }
 
+impl IntoIterator for SequenceNumbers {
+    type Item = u32;
+    type IntoIter = SequenceNumbersIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for &SequenceNumbers {
+    type Item = u32;
+    type IntoIter = SequenceNumbersIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Default for SequenceNumbers {
     fn default() -> Self {
         Self::Single(0)
@@ -540,6 +571,41 @@ impl PartialEq<RangeInclusive<u32>> for SequenceNumbers {
     }
 }
 
+/// An [`Iterator`] over sequence numbers. Returned by [`iter`].
+///
+/// [`iter`]: SequenceNumbers::iter
+#[derive(Clone, Debug)]
+pub struct SequenceNumbersIter {
+    // Note that we use `usize` here to avoid overflows when using a range
+    // with the upper bound of `u32::MAX`.
+    start: usize,
+    end: usize,
+}
+
+impl Iterator for SequenceNumbersIter {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start > self.end {
+            None
+        } else {
+            let num = self.start;
+            self.start += 1;
+            Some(num as u32)
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
+}
+
+impl ExactSizeIterator for SequenceNumbersIter {
+    fn len(&self) -> usize {
+        self.end - self.start + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::proto::Decode;
@@ -552,5 +618,22 @@ mod tests {
         let seqnum = SequenceNumbers::decode(&buf[..]).unwrap();
 
         assert_eq!(seqnum, 103639034..=103639059);
+    }
+
+    #[test]
+    fn test_sequence_numbers_iter() {
+        let mut iter = SequenceNumbers::Single(69).iter();
+        assert_eq!(iter.len(), 1);
+        assert_eq!(iter.next(), Some(69));
+        assert_eq!(iter.next(), None);
+
+        let mut iter = SequenceNumbers::Range(1..=5).iter();
+        assert_eq!(iter.len(), 5);
+        assert_eq!(iter.next(), Some(1));
+        assert_eq!(iter.next(), Some(2));
+        assert_eq!(iter.next(), Some(3));
+        assert_eq!(iter.next(), Some(4));
+        assert_eq!(iter.next(), Some(5));
+        assert_eq!(iter.next(), None);
     }
 }

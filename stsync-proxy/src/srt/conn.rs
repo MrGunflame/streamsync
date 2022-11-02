@@ -842,6 +842,7 @@ where
 {
     fn drop(&mut self) {
         self.state().pool.remove(self.id);
+        self.state().metrics.lock().remove(&self.id);
     }
 }
 

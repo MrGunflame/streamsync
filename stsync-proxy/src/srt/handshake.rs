@@ -115,7 +115,7 @@ where
         socket: stream.socket.clone(),
         last_time: Instant::now(),
         poll_state: PollState::default(),
-        metrics,
+        metrics: metrics.clone(),
         mtu: 1500,
         loss_list: Default::default(),
         queue: Default::default(),
@@ -133,6 +133,7 @@ where
 
     tracing::debug!("Adding new client");
     state.pool.insert(handle);
+    state.metrics.lock().insert(id, metrics);
 
     Ok(())
 }

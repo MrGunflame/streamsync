@@ -115,7 +115,6 @@ impl Stream for FileStream {
             }
         }
 
-        std::thread::sleep_ms(1);
         Poll::Ready(Some(buf.into()))
     }
 }

@@ -139,18 +139,57 @@ where
             Poll::Pending => (),
         }
 
-        if let ConnectionMode::Request { stream, .. } = &mut self.mode {
-            match stream.poll_next_unpin(cx) {
-                Poll::Ready(Some(buf)) => {
-                    println!("read");
-                    self.send_bytes(buf)?;
+        let timestamp = self.timestamp();
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if let ConnectionMode::Request {
+            stream,
+            message_number,
+        } = &mut this.mode
+        {
+            let mut count = 0;
+            while let Poll::Ready(res) = stream.poll_next_unpin(cx) {
+                match res {
+                    Some(buf) => {
+                        let mut packet = DataPacket::default();
+                        packet.header.set_packet_type(PacketType::Data);
+                        packet
+                            .header()
+                            .set_packet_sequence_number(this.server_sequence_number);
+                        packet.header().set_message_number(*message_number);
+                        packet.header().set_ordered(true);
+                        packet.header().set_packet_position(PacketPosition::Full);
+                        packet.data = buf.into();
+
+                        this.server_sequence_number += 1;
+                        *message_number += 1;
+
+                        let mut packet = packet.upcast();
+                        packet.header.timestamp = timestamp;
+                        packet.header.destination_socket_id = this.id.client_socket_id.0;
+
+                        this.queue.push(packet);
+                        count += 1;
+                    }
+                    None => {
+                        this.close()?;
+                        return Poll::Ready(Ok(()));
+                    }
                 }
-                Poll::Ready(None) => {
-                    self.close()?;
-                    return Poll::Ready(Ok(()));
-                }
-                Poll::Pending => (),
             }
+
+            if count > 0 {
+                return Poll::Ready(Ok(()));
+            }
+
+            // match stream.poll_next_unpin(cx) {
+            //     Poll::Ready(Some(buf)) => {}
+            //     Poll::Ready(None) => {
+            //         self.close()?;
+            //         return Poll::Ready(Ok(()));
+            //     }
+            //     Poll::Pending => (),
+            // }
         }
 
         Poll::Pending

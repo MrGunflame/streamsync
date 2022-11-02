@@ -17,3 +17,6 @@ impl<T> From<&T> for Shared<T> {
         Self(src.into())
     }
 }
+
+unsafe impl<T> Send for Shared<T> where T: Send {}
+unsafe impl<T> Sync for Shared<T> where T: Sync {}

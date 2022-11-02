@@ -278,6 +278,8 @@ where
     }
 
     pub fn handle_packet(&mut self, mut packet: Packet) -> Result<()> {
+        tracing::trace!("Connection.handle_packet");
+
         // Update connection stats.
         self.last_time = Instant::now();
 
@@ -534,6 +536,8 @@ where
     }
 
     pub fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
+        tracing::trace!("Connection.handle_handshake");
+
         let syn_cookie = match self.mode {
             ConnectionMode::Induction { syn_cookie } => syn_cookie,
             _ => {

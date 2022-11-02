@@ -123,7 +123,11 @@ where
     };
 
     tokio::task::spawn(async move {
-        conn.await;
+        tracing::trace!("Spawned new connection");
+
+        if let Err(err) = conn.await {
+            tracing::debug!("Failed to serve connection: {}", err);
+        }
     });
 
     tracing::debug!("Adding new client");

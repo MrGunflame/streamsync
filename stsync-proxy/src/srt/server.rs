@@ -1,123 +1,96 @@
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use futures::FutureExt;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::future::Future;
-use std::io::{self, Write};
+use std::io::{self};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::net::{ToSocketAddrs, UdpSocket};
+use std::task::{Context, Poll};
+use tokio::net::UdpSocket;
 
 use super::config::Config;
-use super::state::{Connection, SocketId, State};
-use crate::proto::{Bits, Decode, Encode};
+use super::state::{Connection, State};
+use crate::proto::{Decode, Encode};
 use crate::session::SessionManager;
-use crate::srt::proto::{Keepalive, LightAck};
+use crate::srt::proto::Keepalive;
 use crate::srt::state::ConnectionId;
 
 use super::{Error, IsPacket, Packet};
 
-pub fn serve<A, S>(
-    addr: A,
-    session_manager: S,
-    config: Config,
-) -> (State<S>, impl Future<Output = Result<(), io::Error>>)
+pub struct Server<S>
 where
-    A: ToSocketAddrs,
-    S: SessionManager + 'static,
+    S: SessionManager,
 {
-    let state = State::new(session_manager, config);
-
-    let fut = {
-        // NOTE: This `state` instance MUST outlive all connections in the pool. Only after the
-        // pool is emptied (all handles are closed) and no new udp frames are accepted may the
-        // state be dropped.
-        let state = state.clone();
-
-        async move {
-            let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-            socket.set_recv_buffer_size(500_000_000)?;
-            socket.bind(&SocketAddr::from_str("0.0.0.0:9999").unwrap().into())?;
-
-            let rx = socket.recv_buffer_size()?;
-            let tx = socket.send_buffer_size()?;
-
-            let socket = UdpSocket::from_std(socket.into())?;
-            tracing::info!("Listing on {}", socket.local_addr()?);
-
-            tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
-
-            let socket = Arc::new(socket);
-
-            loop {
-                let mut buf = [0; 1500];
-                let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
-                tracing::trace!("Got {} bytes from {}", len, addr);
-
-                let packet = match Packet::decode(&buf[..len]) {
-                    Ok(packet) => packet,
-                    Err(err) => {
-                        println!("Failed to decode packet: {}", err);
-                        continue;
-                    }
-                };
-
-                let socket = socket.clone();
-                if let Err(err) = handle_message(packet, addr, socket, &state).await {
-                    tracing::error!("Error serving connection: {}", err);
-                }
-            }
-        }
-    };
-
-    (state, fut)
+    pub state: State<S>,
+    socket: Arc<UdpSocket>,
+    fut: Pin<Box<dyn Future<Output = Result<(), Error>>>>,
 }
 
-// // println!("handle data");
-// // println!("Body: {}", packet.body.len());
+impl<S> Server<S>
+where
+    S: SessionManager,
+{
+    pub fn new(session_manager: S, config: Config) -> Result<Self, io::Error> {
+        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_recv_buffer_size(500_000_000)?;
+        socket.bind(&SocketAddr::from_str("0.0.0.0:9999").unwrap().into())?;
 
-// let seqnum = packet.header.seg0.0 .0;
-// // println!("SEQNUM: {:?}", seqnum);
+        let rx = socket.recv_buffer_size()?;
+        let tx = socket.send_buffer_size()?;
 
-// buffer.push(seqnum, packet.body);
+        let socket = UdpSocket::from_std(socket.into())?;
 
-// // frame_count += 1;
-// // if frame_count == 64 {
-// //     let ack = LightAck::builder()
-// //         .last_acknowledged_packet_sequence_number(seqnum + 1)
-// //         .build();
+        tracing::info!("Listening on {}", socket.local_addr()?);
+        tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
 
-// //     socket
-// //         .send_to(&ack.encode_to_vec().unwrap(), addr)
-// //         .await
-// //         .unwrap();
+        let socket = Arc::new(socket);
 
-// //     println!("Send LightACK");
-// // }
+        let state = State::new(session_manager, config);
 
-// let mut ack = AckPacket::default();
-// ack.header.set_packet_type(PacketType::Control);
-// ack.header.timestamp = packet.header.timestamp + 1;
-// ack.header.destination_socket_id = conn.unwrap().client_socket_id.0;
-// let mut header = ack.header.as_control().unwrap();
-// header.set_control_type(ControlPacketType::Ack);
-// ack.header.seg1 = Bits((sequence_num).into());
-// ack.last_acknowledged_packet_sequence_number = seqnum + 1;
-// ack.rtt = 100_000;
-// ack.rtt_variance = 50_000;
-// ack.avaliable_buffer_size = 5000;
-// ack.packets_receiving_rate = 1500;
-// ack.estimated_link_capacity = 5000;
-// ack.receiving_rate = 500000;
+        let fut = {
+            let state = state.clone();
+            let socket = socket.clone();
+            Box::pin(async move {
+                loop {
+                    let mut buf = [0; 1500];
+                    let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+                    tracing::trace!("Got {} bytes from {}", len, addr);
 
-// sequence_num += 1;
+                    let packet = match Packet::decode(&buf[..len]) {
+                        Ok(packet) => packet,
+                        Err(err) => {
+                            println!("Failed to decode packet: {}", err);
+                            continue;
+                        }
+                    };
 
-// let mut buf = Vec::new();
-// ack.encode(&mut buf).unwrap();
+                    let socket = socket.clone();
+                    if let Err(err) = handle_message(packet, addr, socket, &state).await {
+                        break Err(err);
+                    }
+                }
+            })
+        };
 
-// socket.send_to(&buf, addr).await.unwrap();
+        Ok(Self { state, socket, fut })
+    }
+}
+
+impl<S> Future for Server<S>
+where
+    S: SessionManager,
+{
+    type Output = Result<(), Error>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.poll_unpin(cx)
+    }
+}
 
 async fn handle_message<S>(
-    mut packet: Packet,
+    packet: Packet,
     addr: SocketAddr,
     socket: Arc<UdpSocket>,
     state: &State<S>,
@@ -133,8 +106,6 @@ where
 
     // A destination socket id of 0 indicates a handshake request.
     if packet.header.destination_socket_id == 0 {
-        tracing::debug!("New connection from {}", addr);
-
         match packet.downcast() {
             Ok(packet) => {
                 super::handshake::handshake(packet, stream, state).await?;

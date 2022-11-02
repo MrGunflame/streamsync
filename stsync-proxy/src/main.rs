@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
-use srt::config::Config;
+use srt::{config::Config, server::Server};
 
 mod http;
 mod metrics;
@@ -20,11 +20,12 @@ async fn main() {
 
     let manager = BufferSessionManager::new();
 
-    let (state, fut) = srt::server::serve("[::]:9999", manager, Config::default());
+    let server = Server::new(manager, Config::default()).unwrap();
 
+    let state = server.state.clone();
     tokio::task::spawn(async move {
         http::serve(state).await;
     });
 
-    fut.await.unwrap();
+    server.await.unwrap();
 }

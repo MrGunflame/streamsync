@@ -22,13 +22,31 @@ pub enum Error {
     ServerError,
 }
 
+impl Error {
+    pub fn is_invalid_resource_id(&self) -> bool {
+        matches!(self, Self::InvalidResourceId)
+    }
+
+    pub fn is_invalid_credentials(&self) -> bool {
+        matches!(self, Self::InvalidCredentials)
+    }
+}
+
 pub trait SessionManager: Send + Sync + 'static {
     type Sink: Sink<Bytes> + Send + Sync + Unpin + 'static;
     type Stream: Stream<Item = Bytes> + Send + Sync + Unpin + 'static;
 
-    fn publish(&self, resource_id: Option<ResourceId>) -> Result<LiveSink<Self::Sink>, Error>;
+    fn publish(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveSink<Self::Sink>, Error>;
 
-    fn request(&self, resource_id: ResourceId) -> Result<LiveStream<Self::Stream>, Error>;
+    fn request(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveStream<Self::Stream>, Error>;
 }
 
 /// A unique identifier for stream.
@@ -68,6 +86,23 @@ impl Snowflake for ResourceId {
 
     fn instance(&self) -> u64 {
         self.0.instance()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SessionId(pub u64);
+
+impl Display for SessionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:x}", self.0)
+    }
+}
+
+impl FromStr for SessionId {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        u64::from_str_radix(s, 16).map(|v| Self(v))
     }
 }
 

@@ -15,9 +15,10 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
 
-use crate::proto::Encode;
+use crate::proto::{Decode, Encode};
 use crate::session::{LiveStream, SessionManager};
 use crate::srt::proto::Nak;
+use crate::srt::HandshakeType;
 use crate::utils::Shared;
 
 use super::metrics::ConnectionMetrics;
@@ -606,37 +607,92 @@ where
             };
 
             let resource_id = sid.resource().map(|id| id.parse().ok()).flatten();
+            let session_id = sid.session().map(|id| id.parse().ok()).flatten();
 
             match sid.mode() {
-                Some("request") => match resource_id {
-                    Some(id) => {
-                        tracing::info!("Peer {} wants to request resource {:?}", self.id, id);
-
-                        let stream = self.state().session_manager.request(id).unwrap();
-
-                        let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
-
-                        self.mode = ConnectionMode::Request {
-                            stream,
-                            message_number: 1,
-                        };
-                    }
-                    None => return Ok(()),
-                },
-                Some("publish") => {
+                Some("request") => {
                     tracing::info!(
-                        "Peer {} wants to publish to resource {:?}",
+                        "Peer {} wants to request resource {:?} with key {:?}",
                         self.id,
-                        resource_id
+                        resource_id,
+                        session_id
                     );
 
-                    let sink = self.state().session_manager.publish(resource_id).unwrap();
+                    let stream = match self
+                        .state()
+                        .session_manager
+                        .request(resource_id, session_id)
+                    {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            let code =
+                                if err.is_invalid_resource_id() || err.is_invalid_credentials() {
+                                    HandshakeType::REJ_BADSECRET
+                                } else {
+                                    HandshakeType::REJ_UNKNOWN
+                                };
+
+                            return self.reject(code);
+                        }
+                    };
+
+                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
+
+                    self.mode = ConnectionMode::Request {
+                        stream,
+                        message_number: 1,
+                    };
+                }
+                Some("publish") => {
+                    tracing::info!(
+                        "Peer {} wants to publish to resource {:?} with key {:?}",
+                        self.id,
+                        resource_id,
+                        session_id
+                    );
+
+                    let sink = match self
+                        .state()
+                        .session_manager
+                        .publish(resource_id, session_id)
+                    {
+                        Ok(sink) => sink,
+                        Err(err) => {
+                            let code =
+                                if err.is_invalid_resource_id() || err.is_invalid_credentials() {
+                                    HandshakeType::REJ_BADSECRET
+                                } else {
+                                    HandshakeType::REJ_UNKNOWN
+                                };
+
+                            return self.reject(code);
+                        }
+                    };
 
                     self.mode = ConnectionMode::Publish(OutputSink::new(self, sink));
                 }
-                _ => return Ok(()),
+                _ => return self.reject(HandshakeType::REJ_ROGUE),
             }
         }
+
+        self.send(packet)
+    }
+
+    pub fn reject(&mut self, reason: HandshakeType) -> Result<()> {
+        tracing::debug!("Rejecting client {} with reason {:?}", self.id, reason);
+
+        let mut packet = HandshakePacket::default();
+        packet.header.set_packet_type(PacketType::Control);
+        packet.version = 0x00010501;
+        packet.encryption_field = 0;
+        packet.extension_field = ExtensionField::NONE;
+        packet.initial_packet_sequence_number = self.server_sequence_number;
+        packet.maximum_transmission_unit_size = self.mtu as u32;
+        packet.maximum_flow_window_size = 8192;
+        packet.handshake_type = reason;
+        packet.srt_socket_id = self.server_socket_id;
+        packet.syn_cookie = 0;
+        packet.peer_ip_address = 0;
 
         self.send(packet)
     }
@@ -791,35 +847,6 @@ where
 
 pub struct ConnectionHandle {
     tx: mpsc::Sender<Packet>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct AckQueue {
-    inner: VecDeque<(u32, Instant)>,
-}
-
-impl AckQueue {
-    pub fn new() -> Self {
-        Self {
-            inner: VecDeque::new(),
-        }
-    }
-
-    pub fn push_back(&mut self, seq: u32, ts: Instant) {
-        self.inner.push_back((seq, ts));
-    }
-
-    pub fn pop_front(&mut self) -> Option<(u32, Instant)> {
-        self.inner.pop_front()
-    }
-
-    pub fn last(&self) -> Option<(u32, Instant)> {
-        if self.inner.is_empty() {
-            None
-        } else {
-            self.inner.get(self.inner.len() - 1).copied()
-        }
-    }
 }
 
 /// A list to keep track of lost packets. Internally a `LossList` is a stack with all sequence

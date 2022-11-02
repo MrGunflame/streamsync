@@ -10,7 +10,7 @@ use snowflaked::sync::Generator;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
-use super::{Error, LiveSink, LiveStream, ResourceId, SessionManager};
+use super::{Error, LiveSink, LiveStream, ResourceId, SessionId, SessionManager};
 
 #[derive(Debug)]
 pub struct BufferSessionManager {
@@ -31,7 +31,20 @@ impl SessionManager for BufferSessionManager {
     type Sink = BufferSink;
     type Stream = BufferStream;
 
-    fn request(&self, resource_id: ResourceId) -> Result<LiveStream<Self::Stream>, Error> {
+    fn request(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveStream<Self::Stream>, Error> {
+        if session_id.is_none() {
+            return Err(Error::InvalidCredentials);
+        }
+
+        let resource_id = match resource_id {
+            Some(id) => id,
+            None => return Err(Error::InvalidResourceId),
+        };
+
         let mut streams = self.streams.lock().unwrap();
 
         let rx = match streams.get(&resource_id) {
@@ -51,7 +64,15 @@ impl SessionManager for BufferSessionManager {
         Ok(LiveStream::new(resource_id, stream))
     }
 
-    fn publish(&self, resource_id: Option<ResourceId>) -> Result<LiveSink<Self::Sink>, Error> {
+    fn publish(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveSink<Self::Sink>, Error> {
+        if session_id.is_none() {
+            return Err(Error::InvalidCredentials);
+        }
+
         let mut streams = self.streams.lock().unwrap();
 
         let id = match resource_id {

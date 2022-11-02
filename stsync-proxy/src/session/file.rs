@@ -8,7 +8,7 @@ use futures::{io, Sink, Stream};
 use snowflaked::sync::Generator;
 use tokio::time::Interval;
 
-use super::{Error, LiveSink, LiveStream, ResourceId, SessionManager};
+use super::{Error, LiveSink, LiveStream, ResourceId, SessionId, SessionManager};
 
 #[derive(Debug)]
 pub struct FileSessionManager {
@@ -27,7 +27,11 @@ impl SessionManager for FileSessionManager {
     type Sink = FileSink;
     type Stream = FileStream;
 
-    fn publish(&self, resource_id: Option<ResourceId>) -> Result<LiveSink<Self::Sink>, Error> {
+    fn publish(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveSink<Self::Sink>, Error> {
         match resource_id {
             Some(_) => Err(Error::InvalidResourceId),
             None => {
@@ -48,7 +52,16 @@ impl SessionManager for FileSessionManager {
         }
     }
 
-    fn request(&self, resource_id: ResourceId) -> Result<LiveStream<Self::Stream>, Error> {
+    fn request(
+        &self,
+        resource_id: Option<ResourceId>,
+        session_id: Option<SessionId>,
+    ) -> Result<LiveStream<Self::Stream>, Error> {
+        let resource_id = match resource_id {
+            Some(id) => id,
+            None => return Err(Error::InvalidResourceId),
+        };
+
         let file = match File::open(format!("{}.ts", resource_id)) {
             Ok(file) => file,
             Err(err) => {

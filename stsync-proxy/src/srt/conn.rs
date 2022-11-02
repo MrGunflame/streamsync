@@ -386,8 +386,8 @@ where
                 packets_recv_rate = 0;
                 bytes_recv_rate = 0;
             } else {
-                packets_recv_rate = self.metrics.data_packets_recv.load() as u32 / timespan;
-                bytes_recv_rate = self.metrics.data_bytes_recv.load() as u32 / timespan;
+                packets_recv_rate = self.metrics.data_packets_recv.get() as u32 / timespan;
+                bytes_recv_rate = self.metrics.data_bytes_recv.get() as u32 / timespan;
             }
 
             let packet = Ack::builder()

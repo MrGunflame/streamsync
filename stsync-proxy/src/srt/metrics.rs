@@ -1,6 +1,4 @@
-use std::fmt::{self, Display, Formatter};
-use std::ops::AddAssign;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::metrics::Counter;
 
 #[derive(Debug)]
 pub struct ConnectionMetrics {
@@ -34,34 +32,5 @@ impl ConnectionMetrics {
             data_bytes_recv: Counter::new(),
             data_bytes_lost: Counter::new(),
         }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Counter(AtomicUsize);
-
-impl Counter {
-    pub const fn new() -> Self {
-        Self(AtomicUsize::new(0))
-    }
-
-    #[inline]
-    pub fn add(&self, n: usize) {
-        self.0.fetch_add(n, Ordering::Relaxed);
-    }
-
-    #[inline]
-    pub fn inc(&self) {
-        self.add(1);
-    }
-
-    pub fn load(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
-    }
-}
-
-impl Display for Counter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.load().fmt(f)
     }
 }

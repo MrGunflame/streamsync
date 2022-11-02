@@ -5,14 +5,17 @@ use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
-use futures::{Sink, SinkExt};
+use futures::Sink;
 
 use crate::session::{LiveSink, SessionManager};
 
-use super::conn::Connection;
 use super::DataPacket;
 
-// TODO: OutputSink should implement futures::Sink instead of a "push" method.
+/// A [`Sink`] that receives [`DataPacket`]s and converts them back into data.
+///
+/// `OutputSink` wraps around a regular sink `S` accepting the data of the underlying network
+/// stream. An `OutputSink` is responsible for reassembling the stream of the sender by reordering
+/// out-of-order segments, dropping duplicate and too-late packets.
 #[derive(Debug)]
 pub struct OutputSink<S>
 where
@@ -23,7 +26,6 @@ where
     sink: LiveSink<S::Sink>,
     queue: BufferQueue,
     skip_counter: u8,
-    // conn: Weak<Connection>,
     poll_state: PollState,
 }
 
@@ -31,82 +33,15 @@ impl<S> OutputSink<S>
 where
     S: SessionManager,
 {
-    pub fn new(conn: &Connection<S>, sink: LiveSink<S::Sink>) -> Self {
+    /// Creates a new `OutputSink` using `sink` as the underlying [`Sink`].
+    pub fn new(sink: LiveSink<S::Sink>) -> Self {
         Self {
             next_msgnum: 1,
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
-            // conn,
-            // p
             poll_state: PollState::Ready,
         }
-    }
-
-    pub async fn push(
-        &mut self,
-        packet: DataPacket,
-    ) -> Result<(), <S::Sink as Sink<Bytes>>::Error> {
-        let msgnum = packet.message_number();
-
-        // We already assumed the packets to be lost and skipped ahead.
-        if self.next_msgnum > msgnum {
-            tracing::trace!("Segment {} received too late", msgnum);
-            return Ok(());
-        }
-
-        if self.next_msgnum == msgnum {
-            tracing::trace!("Segment {} is in order", msgnum);
-            self.skip_counter = self.skip_counter.saturating_sub(1);
-
-            self.sink.feed(packet.data.into()).await?;
-            self.next_msgnum += 1;
-
-            loop {
-                match self.queue.remove(self.next_msgnum) {
-                    Some(buf) => {
-                        self.sink.feed(buf.into()).await?;
-                        self.next_msgnum += 1;
-                    }
-                    None => break,
-                }
-            }
-        } else {
-            self.skip_counter += 1;
-
-            tracing::debug!(
-                "Segment {} is out of order (missing {}) (skip ahead in {})",
-                msgnum,
-                self.next_msgnum,
-                self.skip_counter,
-            );
-
-            self.queue.insert(msgnum, packet.data);
-
-            if self.skip_counter >= 40 {
-                tracing::trace!("Skip ahead (HEAD {} => {})", self.next_msgnum, msgnum);
-                let mut num_lost = msgnum - self.next_msgnum;
-
-                while self.next_msgnum <= msgnum {
-                    if let Some(buf) = self.queue.remove(self.next_msgnum) {
-                        self.sink.feed(buf.into()).await?;
-                        num_lost -= 1;
-                    }
-
-                    self.next_msgnum += 1;
-                }
-
-                tracing::trace!("Lost {} segments", num_lost);
-
-                // if let Some(conn) = self.conn.upgrade() {
-                //     conn.metrics.packets_dropped.add(num_lost as usize);
-                // }
-
-                self.skip_counter = 0;
-            }
-        }
-
-        Ok(())
     }
 
     fn sink(self: Pin<&mut Self>) -> Pin<&mut LiveSink<S::Sink>> {
@@ -140,7 +75,7 @@ where
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Write));
 
-        let (mut sink, queue, next_msgnum, skip_counter, poll_state) = self.project();
+        let (mut sink, queue, next_msgnum, _, poll_state) = self.project();
 
         if let Err(err) = ready!(sink.as_mut().poll_ready(cx)) {
             return Poll::Ready(Err(err));
@@ -262,11 +197,8 @@ where
     }
 }
 
-// unsafe impl<S> Send for OutputSink<S> where S: SessionManager + Send {}
-// unsafe impl<S> Sync for OutputSink<S> where S: SessionManager + Sync {}
-
 #[derive(Clone, Debug, Default)]
-pub struct BufferQueue {
+struct BufferQueue {
     inner: HashMap<u32, Vec<u8>>,
     /// Total size of all buffers combined.
     size: usize,

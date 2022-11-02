@@ -579,21 +579,53 @@ impl HandshakeType {
     pub const INDUCTION: Self = Self(0x00000001);
 
     // REJECTION CODES (https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3)
+
+    /// Unknown reason
     pub const REJ_UNKNOWN: Self = Self(1000);
+
+    /// System function error
     pub const REJ_SYSTEM: Self = Self(1001);
+
+    /// Rejected by peer
     pub const REJ_PEER: Self = Self(1002);
+
+    /// Resource allocation problem
     pub const REJ_RESOURCE: Self = Self(1003);
+
+    /// incorrect data in handshake
     pub const REJ_ROGUE: Self = Self(1004);
+
+    /// listener's backlog exceeded
     pub const REJ_BACKLOG: Self = Self(1005);
+
+    /// internal program error
     pub const REJ_IPE: Self = Self(1006);
+
+    /// socket is closing
     pub const REJ_CLOSE: Self = Self(1007);
+
+    /// peer is older version than agent's min
     pub const REJ_VERSION: Self = Self(1008);
+
+    /// rendezvous cookie collision
     pub const REJ_RDVCOOKIE: Self = Self(1009);
+
+    /// wrong password
     pub const REJ_BADSECRET: Self = Self(1010);
+
+    /// password required or unexpected
     pub const REJ_INSECURE: Self = Self(1011);
+
+    /// Stream flag collision
     pub const REJ_MESSAGEAPI: Self = Self(1012);
+
+    /// incompatible congestion-controller type
     pub const REJ_CONGESTION: Self = Self(1013);
+
+    /// incompatible packet filter
     pub const REJ_FILTER: Self = Self(1014);
+
+    /// incompatible group
     pub const REJ_GROUP: Self = Self(1015);
 
     pub fn to_u32(self) -> u32 {
@@ -1452,6 +1484,8 @@ impl FromStr for StandardStreamId {
 pub struct ExtensionField(u16);
 
 impl ExtensionField {
+    pub const NONE: Self = Self(0);
+
     /// The initial value for the INDUCTION phase.
     pub const INDUCTION: Self = Self(2);
     /// The srt magic `0x4A17` for the CONCLUSION phase.

@@ -90,6 +90,8 @@ impl<T> Buffer<T> {
         self.tail = 0;
     }
 
+    /// Pushes a new element onto the `Buffer`. If the `Buffer` does not have enough capacity to
+    /// store an additional element, this will drop the oldest existing element.
     pub fn push(&mut self, item: T) {
         let pos = self.head % self.size();
 
@@ -113,6 +115,8 @@ impl<T> Buffer<T> {
         self.head += 1;
     }
 
+    /// Returns the element with the given `index`. Returns `None` if the element does not exist in
+    /// the `Buffer`.
     pub fn get(&self, index: usize) -> Option<&T> {
         if index >= self.head || index < self.tail {
             return None;

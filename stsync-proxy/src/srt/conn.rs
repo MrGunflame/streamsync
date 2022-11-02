@@ -15,7 +15,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
 
-use crate::proto::{Decode, Encode};
+use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
 use crate::srt::proto::Nak;
 use crate::srt::HandshakeType;
@@ -669,7 +669,7 @@ where
                         }
                     };
 
-                    self.mode = ConnectionMode::Publish(OutputSink::new(self, sink));
+                    self.mode = ConnectionMode::Publish(OutputSink::new(sink));
                 }
                 _ => return self.reject(HandshakeType::REJ_ROGUE),
             }
@@ -845,9 +845,47 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ConnectionHandle {
-    tx: mpsc::Sender<Packet>,
+    pub id: ConnectionId,
+    pub tx: mpsc::Sender<Packet>,
 }
+
+impl ConnectionHandle {
+    pub async fn send(&self, packet: Packet) {
+        let _ = self.tx.send(packet).await;
+    }
+}
+
+impl Hash for ConnectionHandle {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl Borrow<ConnectionId> for ConnectionHandle {
+    #[inline]
+    fn borrow(&self) -> &ConnectionId {
+        &self.id
+    }
+}
+
+impl PartialEq<ConnectionId> for ConnectionHandle {
+    #[inline]
+    fn eq(&self, other: &ConnectionId) -> bool {
+        self.id == *other
+    }
+}
+
+impl PartialEq for ConnectionHandle {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ConnectionHandle {}
 
 /// A list to keep track of lost packets. Internally a `LossList` is a stack with all sequence
 /// numbers sorted in ascending order. This sorting is not done automatically, it is only possible

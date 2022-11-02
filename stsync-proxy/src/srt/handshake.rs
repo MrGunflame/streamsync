@@ -8,15 +8,14 @@ use std::time::Instant;
 
 use tokio::sync::mpsc;
 
-use super::conn::{Connection, ConnectionMode};
+use super::conn::{Connection, ConnectionHandle, ConnectionMode};
 use super::server::SrtStream;
-use super::state::State;
+use super::state::{ConnectionId, State};
 use super::IsPacket;
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::session::SessionManager;
-use crate::srt::conn::{AckQueue, PollState, Rtt, TickInterval};
+use crate::srt::conn::{PollState, Rtt, TickInterval};
 use crate::srt::metrics::ConnectionMetrics;
-use crate::srt::state::ConnectionId;
 use crate::srt::ExtensionField;
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
@@ -130,8 +129,10 @@ where
         }
     });
 
+    let handle = ConnectionHandle { id, tx };
+
     tracing::debug!("Adding new client");
-    state.pool.insert(id, tx);
+    state.pool.insert(handle);
 
     Ok(())
 }

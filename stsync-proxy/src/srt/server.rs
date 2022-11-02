@@ -125,7 +125,7 @@ where
 
     match state.pool.get(id) {
         Some(handle) => {
-            let _ = handle.send(packet).await;
+            handle.send(packet).await;
         }
         None => {
             tracing::debug!("Received packet from unknown client {}", id);

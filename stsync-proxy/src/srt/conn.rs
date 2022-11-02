@@ -62,7 +62,7 @@ where
 
     pub mode: ConnectionMode<S>,
 
-    pub inflight_acks: AckQueue,
+    pub inflight_acks: LossList,
     pub loss_list: LossList,
     pub rtt: Rtt,
 
@@ -105,6 +105,18 @@ where
 
         // Empty the sending queue before doing anything else.
         if let Some(packet) = self.queue.pop() {
+            // Update connection stats.
+            match packet.header.packet_type() {
+                PacketType::Data => {
+                    self.metrics.data_packets_sent.add(1);
+                    self.metrics.data_bytes_sent.add(packet.size());
+                }
+                PacketType::Control => {
+                    self.metrics.ctrl_packets_sent.add(1);
+                    self.metrics.ctrl_bytes_sent.add(packet.size());
+                }
+            }
+
             let socket = self.socket.clone();
             let addr = self.id.addr;
             let fut = Box::pin(async move {
@@ -381,14 +393,15 @@ where
                 .last_acknowledged_packet_sequence_number(self.client_sequence_number)
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
-                .avaliable_buffer_size(5000)
-                .packets_receiving_rate(5000)
-                .estimated_link_capacity(5000)
-                .receiving_rate(5000000)
+                .avaliable_buffer_size(8192)
+                .packets_receiving_rate(packets_recv_rate)
+                .estimated_link_capacity(packets_recv_rate)
+                .receiving_rate(bytes_recv_rate)
                 .build();
 
-            self.inflight_acks
-                .push_back(self.server_sequence_number, Instant::now());
+            self.inflight_acks.push(self.server_sequence_number);
+
+            self.server_sequence_number += 1;
 
             self.send(packet)?;
         }
@@ -475,7 +488,7 @@ where
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.client_sequence_number != seqnum && !self.loss_list.remove(seqnum) {
+        if self.client_sequence_number != seqnum && self.loss_list.remove(seqnum).is_none() {
             self.loss_list.extend(self.client_sequence_number..seqnum);
         }
 
@@ -489,15 +502,11 @@ where
     }
 
     pub fn handle_ackack(&mut self, packet: AckAck) -> Result<()> {
-        while let Some((seq, ts)) = self.inflight_acks.pop_front() {
-            if packet.acknowledgement_number() == seq {
-                let rtt = ts.elapsed().as_micros() as u32;
-                tracing::trace!("Received ACKACK with RTT {}", rtt);
+        if let Some(ts) = self.inflight_acks.remove(packet.acknowledgement_number()) {
+            let rtt = ts.elapsed().as_micros() as u32;
+            tracing::trace!("Received ACKACK with RTT {}", rtt);
 
-                self.rtt.update(rtt);
-
-                return Ok(());
-            }
+            self.rtt.update(rtt);
         }
 
         Ok(())
@@ -852,14 +861,15 @@ impl LossList {
         self.clear_in(rtt, Instant::now())
     }
 
-    /// Removes a sequence number from the `LossList`. Returns `true` if the sequence was removed.
-    pub fn remove(&mut self, seq: u32) -> bool {
+    /// Removes a sequence number from the `LossList`. Returns the [`Instant`] at which the
+    /// sequence number was inserted.
+    pub fn remove(&mut self, seq: u32) -> Option<Instant> {
         if let Ok(index) = self.inner.binary_search_by(|(n, _)| n.cmp(&seq)) {
-            self.inner.remove(index);
-            return true;
+            let (_, ts) = self.inner.remove(index);
+            return Some(ts);
         }
 
-        false
+        None
     }
 
     fn push_in(&mut self, seq: u32, now: Instant) {

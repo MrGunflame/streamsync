@@ -109,7 +109,7 @@ where
         server_sequence_number: server_seqnum,
         client_sequence_number: client_seqnum,
         mode: ConnectionMode::Induction { syn_cookie },
-        inflight_acks: AckQueue::new(),
+        inflight_acks: Default::default(),
         rtt: Rtt::new(),
         tick_interval: TickInterval::new(),
         start_time: Instant::now(),

@@ -1,4 +1,5 @@
 use std::fmt::{self, Display, Formatter};
+use std::ops::AddAssign;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]

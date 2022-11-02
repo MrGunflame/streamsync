@@ -2,6 +2,7 @@
 
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
 use srt::{config::Config, server::Server};
+use tokio::runtime::Builder;
 
 mod http;
 mod metrics;
@@ -14,8 +15,13 @@ mod srt;
 mod state;
 mod utils;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let rt = Builder::new_multi_thread().enable_all().build().unwrap();
+
+    rt.block_on(async_main());
+}
+
+async fn async_main() {
     pretty_env_logger::init();
 
     let manager = BufferSessionManager::new();

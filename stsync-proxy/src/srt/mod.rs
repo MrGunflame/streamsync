@@ -1,17 +1,13 @@
 //! Secure Reliable Transport (SRT) implementation.
 //!
 //! https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01
-mod ack;
 mod buffer;
 pub mod config;
 mod conn;
-mod data;
 mod handshake;
 mod metrics;
-mod nak;
 pub mod proto;
 pub mod server;
-mod shutdown;
 mod sink;
 pub mod state;
 mod stream;

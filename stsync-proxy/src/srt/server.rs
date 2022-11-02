@@ -11,10 +11,9 @@ use std::task::{Context, Poll};
 use tokio::net::UdpSocket;
 
 use super::config::Config;
-use super::state::{Connection, State};
+use super::state::State;
 use crate::proto::{Decode, Encode};
 use crate::session::SessionManager;
-use crate::srt::proto::Keepalive;
 use crate::srt::state::ConnectionId;
 
 use super::{Error, IsPacket, Packet};
@@ -152,34 +151,4 @@ impl<'a> SrtStream<'a> {
         self.socket.send_to(&buf, self.addr).await?;
         Ok(())
     }
-}
-
-/// A SrtStream with an associated connection.
-#[derive(Clone)]
-pub struct SrtConnStream<'a> {
-    pub stream: SrtStream<'a>,
-    pub conn: Arc<Connection>,
-}
-
-impl<'a> SrtConnStream<'a> {
-    pub fn new(stream: SrtStream<'a>, conn: Arc<Connection>) -> Self {
-        Self { stream, conn }
-    }
-
-    pub async fn send<T>(&self, packet: T) -> Result<(), Error>
-    where
-        T: IsPacket,
-    {
-        let mut packet = packet.upcast();
-        packet.header.timestamp = self.conn.timestamp();
-        packet.header.destination_socket_id = self.conn.client_socket_id.0;
-
-        self.stream.send(packet).await
-    }
-}
-
-async fn keepalive(_packet: Keepalive, stream: SrtConnStream<'_>) -> Result<(), Error> {
-    let resp = Keepalive::builder().build();
-    stream.send(resp).await?;
-    Ok(())
 }

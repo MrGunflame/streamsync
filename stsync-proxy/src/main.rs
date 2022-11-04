@@ -1,5 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use clap::Parser;
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
 use srt::{config::Config, server::Server};
 use tokio::runtime::Builder;
@@ -12,7 +13,13 @@ mod srt;
 mod state;
 mod utils;
 
+#[derive(Debug, Parser)]
+#[command(author, version, about, long_about = None)]
+pub struct Args {}
+
 fn main() {
+    let _args = Args::parse();
+
     let rt = Builder::new_multi_thread().enable_all().build().unwrap();
 
     rt.block_on(async_main());

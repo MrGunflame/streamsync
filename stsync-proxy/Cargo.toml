@@ -1,7 +1,12 @@
 [package]
 name = "stsync-proxy"
-version = "0.1.0"
+description = "The streamsync SRT proxy server"
+version = "0.2.0"
 edition = "2021"
+authors = ["MrGunflame <git@robbsrv.de>"]
+repository = "https://github.com/MrGunflame/streamsync"
+
+publish = false
 
 [dependencies]
 futures = "0.3.24"
@@ -18,6 +23,7 @@ tokio-stream = { version = "0.1.11", features = ["sync"] }
 hyper = { version = "0.14.20", features = ["http1", "http2", "server"] }
 ahash = "0.8.0"
 parking_lot = "0.12.1"
+clap = { version = "4.0.18", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

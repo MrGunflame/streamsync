@@ -14,7 +14,7 @@ use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
-use tracing::{event, Level, Span};
+use tracing::{event, span, Level, Span};
 
 use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
@@ -47,61 +47,107 @@ where
     S: SessionManager,
 {
     pub id: ConnectionId,
-    pub state: Shared<State<S>>,
-    pub metrics: Arc<ConnectionMetrics>,
+    state: Shared<State<S>>,
+    metrics: Arc<ConnectionMetrics>,
 
-    pub incoming: mpsc::Receiver<Packet>,
-    pub socket: Arc<UdpSocket>,
+    incoming: mpsc::Receiver<Packet>,
+    socket: Arc<UdpSocket>,
 
     /// Time of the first sent packet.
-    pub start_time: Instant,
+    start_time: Instant,
 
-    pub server_socket_id: u32,
-    pub client_socket_id: u32,
+    server_sequence_number: u32,
+    client_sequence_number: u32,
 
-    pub server_sequence_number: u32,
-    pub client_sequence_number: u32,
+    mode: ConnectionMode<S>,
 
-    pub mode: ConnectionMode<S>,
+    inflight_acks: LossList,
+    loss_list: LossList,
+    rtt: Rtt,
 
-    pub inflight_acks: LossList,
-    pub loss_list: LossList,
-    pub rtt: Rtt,
-
-    pub tick_interval: TickInterval,
+    tick_interval: TickInterval,
 
     /// Timestamp of the last packet received by the peer.
-    pub last_time: Instant,
+    last_time: Instant,
 
     /// Self-referential struct.
-    pub poll_state: PollState<S>,
+    poll_state: PollState<S>,
 
     /// Maximum transmission unit, the maximum size for an Ethernet frame. The default is 1500,
     /// which is the maximum size for an Ethernet frame.
-    pub mtu: u16,
+    mtu: u16,
 
-    pub queue: TransmissionQueue,
+    queue: TransmissionQueue,
 
-    pub resource_span: Span,
+    resource_span: Span,
 }
 
 impl<S> Connection<S>
 where
     S: SessionManager,
 {
+    /// Creates a new `Connection`.
+    ///
+    /// # Safety
+    ///
+    /// The provided `state` must outlive the created `Connection`. In particular the `Connection`
+    /// must be dropped before `state` is deallocated. Violating this guarantee will result in
+    /// undefined behavoir.
+    pub unsafe fn new(
+        id: ConnectionId,
+        state: &State<S>,
+        socket: Arc<UdpSocket>,
+        seqnum: u32,
+        syn_cookie: u32,
+    ) -> (Self, ConnectionHandle) {
+        let (tx, rx) = mpsc::channel(1024);
+
+        let metrics = Arc::new(ConnectionMetrics::new());
+        state.conn_metrics.lock().insert(id, metrics.clone());
+        state.metrics.connections_total.inc();
+        state.metrics.connections_handshake_current.inc();
+
+        let resource_span = span!(Level::DEBUG, "Connection");
+
+        let this = Self {
+            id,
+            incoming: rx,
+            state: state.into(),
+            mode: ConnectionMode::Induction { syn_cookie },
+            inflight_acks: LossList::new(),
+            rtt: Rtt::new(),
+            tick_interval: TickInterval::new(),
+            start_time: Instant::now(),
+            socket,
+            last_time: Instant::now(),
+            poll_state: PollState::default(),
+            metrics,
+            mtu: 1500,
+            queue: TransmissionQueue::default(),
+            resource_span,
+            server_sequence_number: seqnum,
+            client_sequence_number: seqnum,
+            loss_list: LossList::new(),
+        };
+
+        let handle = ConnectionHandle { id, tx };
+
+        (this, handle)
+    }
+
     /// Returns a reference to the [`State`] that owns this `Connection`.
     #[inline]
-    pub fn state(&self) -> &State<S> {
+    fn state(&self) -> &State<S> {
         // SAFETY: When a `Connection` is created the caller guarantees that the provided
         // `&State<S>` reference outlives the `Connection` instance.
         unsafe { self.state.as_ref() }
     }
 
-    pub fn timestamp(&self) -> u32 {
+    fn timestamp(&self) -> u32 {
         self.start_time.elapsed().as_micros() as u32
     }
 
-    pub fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         tracing::trace!("Connection.poll_read");
 
         #[cfg(debug_assertions)]
@@ -211,6 +257,11 @@ where
         Poll::Pending
     }
 
+    /// Prepares the `Connection` for calls to [`poll_read`]. This method must be called before
+    /// calling [`poll_read`] if the state was not already [`Read`].
+    ///
+    /// [`poll_read`]: Self::poll_read
+    /// [`Read`]: PollState::Read
     fn init_read(&mut self) {
         self.poll_state = PollState::Read;
     }
@@ -255,7 +306,7 @@ where
         }
     }
 
-    pub fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_close");
 
         #[cfg(debug_assertions)]
@@ -281,7 +332,7 @@ where
         }
     }
 
-    pub fn handle_packet(&mut self, mut packet: Packet) -> Result<()> {
+    fn handle_packet(&mut self, mut packet: Packet) -> Result<()> {
         tracing::trace!("Connection.handle_packet");
 
         // Update connection stats.
@@ -367,7 +418,7 @@ where
         }
     }
 
-    pub fn tick(&mut self) -> Result<()> {
+    fn tick(&mut self) -> Result<()> {
         // Drop the connection after 15s of no response from the peer.
         if self.last_time.elapsed() >= Duration::from_secs(15) {
             return self.close();
@@ -415,7 +466,7 @@ where
         Ok(())
     }
 
-    pub fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
+    fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
         let message_number = match &mut self.mode {
             ConnectionMode::Request {
                 stream: _,
@@ -441,7 +492,7 @@ where
     }
 
     /// Sends a packet to the peer.
-    pub fn send<T>(&mut self, packet: T) -> Result<()>
+    fn send<T>(&mut self, packet: T) -> Result<()>
     where
         T: IsPacket,
     {
@@ -454,7 +505,7 @@ where
     }
 
     /// Closes the connection.
-    pub fn close(&mut self) -> Result<()> {
+    fn close(&mut self) -> Result<()> {
         self.send(Shutdown::builder().build())?;
 
         if let ConnectionMode::Publish(sink) = &mut self.mode {
@@ -474,7 +525,7 @@ where
         Ok(())
     }
 
-    pub fn handle_data(&mut self, packet: DataPacket) -> Result<()> {
+    fn handle_data(&mut self, packet: DataPacket) -> Result<()> {
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Read));
 
@@ -528,11 +579,11 @@ where
         Ok(())
     }
 
-    pub fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<()> {
+    fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<()> {
         self.close()
     }
 
-    pub fn handle_ackack(&mut self, packet: AckAck) -> Result<()> {
+    fn handle_ackack(&mut self, packet: AckAck) -> Result<()> {
         if let Some(ts) = self.inflight_acks.remove(packet.acknowledgement_number()) {
             let rtt = ts.elapsed().as_micros() as u32;
             tracing::trace!("Received ACKACK with RTT {}", rtt);
@@ -548,11 +599,11 @@ where
         Ok(())
     }
 
-    pub fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<()> {
+    fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<()> {
         self.send(Keepalive::builder().build())
     }
 
-    pub fn handle_ack(&mut self, packet: Ack) -> Result<()> {
+    fn handle_ack(&mut self, packet: Ack) -> Result<()> {
         // We only accpet ACK packets when the peer requests a stream.
         if let ConnectionMode::Request { .. } = self.mode {
             self.rtt.rtt = packet.rtt;
@@ -574,7 +625,7 @@ where
         }
     }
 
-    pub fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
+    fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
         tracing::trace!("Connection.handle_handshake");
 
         let syn_cookie = match self.mode {
@@ -722,8 +773,9 @@ where
         self.send(packet)
     }
 
-    pub fn reject(&mut self, reason: HandshakeType) -> Result<()> {
-        tracing::debug!("Rejecting client {} with reason {:?}", self.id, reason);
+    /// Rejects the remote connection using the given `reason`.
+    fn reject(&mut self, reason: HandshakeType) -> Result<()> {
+        event!(parent: &self.resource_span, Level::DEBUG, "Rejecting client {} with reason {:?}", self.id, reason);
 
         let mut packet = HandshakePacket::default();
         packet.header.set_packet_type(PacketType::Control);
@@ -734,7 +786,7 @@ where
         packet.maximum_transmission_unit_size = self.mtu as u32;
         packet.maximum_flow_window_size = 8192;
         packet.handshake_type = reason;
-        packet.srt_socket_id = self.server_socket_id;
+        packet.srt_socket_id = self.id.server_socket_id.0;
         packet.syn_cookie = 0;
         packet.peer_ip_address = 0;
 
@@ -745,7 +797,7 @@ where
     /// mode, otherwise it does nothing.
     ///
     /// [`Request`]: ConnectionMode::Request
-    pub fn handle_nak(&mut self, packet: Nak) -> Result<()> {
+    fn handle_nak(&mut self, packet: Nak) -> Result<()> {
         let timestamp = self.timestamp();
 
         let stream = match &mut self.mode {
@@ -789,11 +841,11 @@ where
         Ok(())
     }
 
-    pub async fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<()> {
+    fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<()> {
         Ok(())
     }
 
-    pub async fn handle_peer_error(&mut self, _packet: Packet) -> Result<()> {
+    fn handle_peer_error(&mut self, _packet: Packet) -> Result<()> {
         Ok(())
     }
 }
@@ -901,7 +953,7 @@ where
 #[derive(Clone, Debug)]
 pub struct ConnectionHandle {
     pub id: ConnectionId,
-    pub tx: mpsc::Sender<Packet>,
+    tx: mpsc::Sender<Packet>,
 }
 
 impl ConnectionHandle {
@@ -1064,7 +1116,7 @@ impl Extend<u32> for LossList {
     }
 }
 
-pub enum ConnectionMode<S>
+enum ConnectionMode<S>
 where
     S: SessionManager,
 {
@@ -1149,7 +1201,7 @@ impl Future for TickInterval {
     }
 }
 
-pub enum PollState<S>
+enum PollState<S>
 where
     S: SessionManager,
 {

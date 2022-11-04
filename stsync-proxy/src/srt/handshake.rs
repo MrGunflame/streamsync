@@ -3,19 +3,13 @@
 //! Currently only the Caller-Listener handshake process is supported.
 //!
 //! See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3
-use std::sync::Arc;
-use std::time::Instant;
 
-use tokio::sync::mpsc;
-
-use super::conn::{Connection, ConnectionHandle, ConnectionMode};
+use super::conn::Connection;
 use super::server::SrtStream;
 use super::state::{ConnectionId, State};
 use super::IsPacket;
 use super::{Error, HandshakePacket, HandshakeType, PacketType};
 use crate::session::SessionManager;
-use crate::srt::conn::{PollState, Rtt, TickInterval};
-use crate::srt::metrics::ConnectionMetrics;
 use crate::srt::ExtensionField;
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
@@ -88,41 +82,15 @@ where
 
     stream.send(resp).await?;
 
-    let (tx, rx) = mpsc::channel(1024);
-
     let id = ConnectionId {
         addr: stream.addr,
         server_socket_id: server_socket_id.into(),
         client_socket_id: client_socket_id.into(),
     };
 
-    let metrics = Arc::new(ConnectionMetrics::new());
-    state.conn_metrics.lock().insert(id, metrics.clone());
-    state.metrics.connections_total.inc();
-    state.metrics.connections_handshake_current.inc();
-
-    let conn = Connection {
-        id,
-        incoming: rx,
-        state: state.into(),
-        server_socket_id,
-        client_socket_id,
-        server_sequence_number: server_seqnum,
-        client_sequence_number: client_seqnum,
-        mode: ConnectionMode::Induction { syn_cookie },
-        inflight_acks: Default::default(),
-        rtt: Rtt::new(),
-        tick_interval: TickInterval::new(),
-        start_time: Instant::now(),
-        socket: stream.socket.clone(),
-        last_time: Instant::now(),
-        poll_state: PollState::default(),
-        metrics: metrics.clone(),
-        mtu: 1500,
-        loss_list: Default::default(),
-        queue: Default::default(),
-        resource_span: tracing::span!(tracing::Level::DEBUG, "Connection"),
-    };
+    // SAFETY: We guarantee that `state` outlives the connection.
+    let (conn, handle) =
+        unsafe { Connection::new(id, state, stream.socket, client_seqnum, syn_cookie) };
 
     tokio::task::spawn(async move {
         tracing::trace!("Spawned new connection");
@@ -131,8 +99,6 @@ where
             tracing::debug!("Failed to serve connection: {}", err);
         }
     });
-
-    let handle = ConnectionHandle { id, tx };
 
     tracing::debug!("Adding new client");
     state.pool.insert(handle);

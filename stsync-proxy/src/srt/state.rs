@@ -14,7 +14,7 @@ use crate::session::SessionManager;
 
 use super::config::Config;
 use super::conn::ConnectionHandle;
-use super::metrics::ConnectionMetrics;
+use super::metrics::{ConnectionMetrics, ServerMetrics};
 
 #[derive(Debug)]
 pub struct State<S>
@@ -35,7 +35,8 @@ where
                 pool: ConnectionPool::new(),
                 prng: Mutex::new(OsRng),
                 session_manager,
-                metrics: Mutex::new(AHashMap::new()),
+                conn_metrics: Mutex::new(AHashMap::new()),
+                metrics: ServerMetrics::new(),
             }),
         }
     }
@@ -74,7 +75,8 @@ where
     // NOTE: This actually is a CSPRNG but it doesn't have to be.
     pub prng: Mutex<OsRng>,
     pub session_manager: S,
-    pub metrics: Mutex<AHashMap<ConnectionId, Arc<ConnectionMetrics>>>,
+    pub conn_metrics: Mutex<AHashMap<ConnectionId, Arc<ConnectionMetrics>>>,
+    pub metrics: ServerMetrics,
 }
 
 impl<S> StateInner<S>

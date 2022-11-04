@@ -97,7 +97,9 @@ where
     };
 
     let metrics = Arc::new(ConnectionMetrics::new());
-    state.metrics.lock().insert(id, metrics.clone());
+    state.conn_metrics.lock().insert(id, metrics.clone());
+    state.metrics.connections_total.inc();
+    state.metrics.connections_handshake_current.inc();
 
     let conn = Connection {
         id,
@@ -119,6 +121,7 @@ where
         mtu: 1500,
         loss_list: Default::default(),
         queue: Default::default(),
+        resource_span: tracing::span!(tracing::Level::DEBUG, "Connection"),
     };
 
     tokio::task::spawn(async move {
@@ -133,7 +136,6 @@ where
 
     tracing::debug!("Adding new client");
     state.pool.insert(handle);
-    state.metrics.lock().insert(id, metrics);
 
     Ok(())
 }

@@ -1,4 +1,4 @@
-//! Output sinks
+//! SRT Output sink
 use std::collections::HashMap;
 use std::hint::unreachable_unchecked;
 use std::pin::Pin;
@@ -84,15 +84,16 @@ where
         match queue.remove(*next_msgnum) {
             Some(buf) => {
                 sink.start_send(buf.into())?;
+                *next_msgnum += 1;
 
                 *poll_state = PollState::Write;
-                Poll::Ready(Ok(()))
             }
             None => {
                 *poll_state = PollState::Ready;
-                Poll::Ready(Ok(()))
             }
         }
+
+        Poll::Ready(Ok(()))
     }
 
     fn poll_skip_ahead(
@@ -162,6 +163,7 @@ where
 
         if self.next_msgnum == msgnum {
             self.skip_counter = self.skip_counter.saturating_sub(1);
+            self.next_msgnum += 1;
 
             tracing::trace!("Segment {} is in order", msgnum);
 
@@ -169,6 +171,11 @@ where
 
             self.poll_state = PollState::Write;
         } else {
+            tracing::trace!(
+                "Segment {} is out of order (missing {})",
+                msgnum,
+                self.next_msgnum
+            );
             self.skip_counter += 1;
 
             self.queue.insert(msgnum, packet.data);

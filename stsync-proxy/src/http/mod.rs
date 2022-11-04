@@ -43,9 +43,28 @@ where
 
 async fn metrics<S: SessionManager>(state: &State<S>) -> Response<Body> {
     let mut string = String::new();
-    let guard = state.metrics.lock();
+    let guard = state.conn_metrics.lock();
     let iter = guard.iter();
-    writeln!(string, "srt_connections_active {}", iter.len()).unwrap();
+
+    writeln!(
+        string,
+        "srt_connections_total {}",
+        state.metrics.connections_total
+    )
+    .unwrap();
+
+    for (mode, gauge) in [
+        ("handshake", &state.metrics.connections_handshake_current),
+        ("request", &state.metrics.connections_request_current),
+        ("publish", &state.metrics.connections_publish_current),
+    ] {
+        writeln!(
+            string,
+            "srt_connections_current{{mode=\"{}\"}} {}",
+            mode, gauge
+        )
+        .unwrap();
+    }
 
     for (id, metrics) in iter {
         let id = id.server_socket_id.0;
@@ -131,6 +150,20 @@ async fn metrics<S: SessionManager>(state: &State<S>) -> Response<Body> {
             string,
             "srt_connection_ctrl_bytes_lost{{id=\"{}\"}} {}",
             id, metrics.ctrl_bytes_lost
+        )
+        .unwrap();
+
+        writeln!(
+            string,
+            "srt_connection_rtt{{id=\"{}\"}} {}",
+            id, metrics.rtt
+        )
+        .unwrap();
+
+        writeln!(
+            string,
+            "srt_connection_rtt_variance{{id=\"{}\"}} {}",
+            id, metrics.rtt_variance
         )
         .unwrap();
     }

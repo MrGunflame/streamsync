@@ -47,3 +47,54 @@ impl Display for Counter {
         self.get().fmt(f)
     }
 }
+
+/// A counter that can go up and down arbitrarily.
+#[derive(Debug, Default)]
+#[repr(transparent)]
+pub struct Gauge(AtomicUsize);
+
+impl Gauge {
+    /// Creates a new `Gauge` initialized to `0`.
+    #[inline]
+    pub const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+
+    #[inline]
+    pub fn add(&self, n: usize) {
+        self.0.fetch_add(n, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn inc(&self) {
+        self.add(1);
+    }
+
+    #[inline]
+    pub fn sub(&self, n: usize) {
+        self.0.fetch_sub(n, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn dec(&self) {
+        self.sub(1);
+    }
+
+    #[inline]
+    pub fn set(&self, n: usize) {
+        self.0.store(n, Ordering::Relaxed);
+    }
+
+    /// Returns the current value of the `Gauge`.
+    #[inline]
+    pub fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+impl Display for Gauge {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}

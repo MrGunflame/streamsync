@@ -157,11 +157,17 @@ where
 {
     type Error = T::Error;
 
+    #[inline]
     fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
         self.0.encode(writer)
+    }
+
+    #[inline]
+    fn size_hint(&self) -> usize {
+        Encode::size_hint(&self.0)
     }
 }
 
@@ -171,6 +177,7 @@ where
 {
     type Error = T::Error;
 
+    #[inline]
     fn decode<R>(reader: R) -> Result<Self, Self::Error>
     where
         R: Read,
@@ -186,12 +193,14 @@ pub trait IntoBitRange {
 }
 
 impl IntoBitRange for Range<usize> {
+    #[inline]
     fn into_bit_range(self) -> Range<usize> {
         self
     }
 }
 
 impl IntoBitRange for usize {
+    #[inline]
     fn into_bit_range(self) -> Range<usize> {
         self..self + 1
     }

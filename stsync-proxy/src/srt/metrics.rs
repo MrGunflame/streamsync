@@ -1,6 +1,25 @@
-use crate::metrics::Counter;
+use crate::metrics::{Counter, Gauge};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+pub struct ServerMetrics {
+    pub connections_total: Counter,
+    pub connections_publish_current: Gauge,
+    pub connections_request_current: Gauge,
+    pub connections_handshake_current: Gauge,
+}
+
+impl ServerMetrics {
+    pub const fn new() -> Self {
+        Self {
+            connections_total: Counter::new(),
+            connections_publish_current: Gauge::new(),
+            connections_request_current: Gauge::new(),
+            connections_handshake_current: Gauge::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct ConnectionMetrics {
     pub ctrl_packets_sent: Counter,
     pub ctrl_packets_recv: Counter,
@@ -14,6 +33,8 @@ pub struct ConnectionMetrics {
     pub data_bytes_sent: Counter,
     pub data_bytes_recv: Counter,
     pub data_bytes_lost: Counter,
+    pub rtt: Gauge,
+    pub rtt_variance: Gauge,
 }
 
 impl ConnectionMetrics {
@@ -31,6 +52,8 @@ impl ConnectionMetrics {
             data_bytes_sent: Counter::new(),
             data_bytes_recv: Counter::new(),
             data_bytes_lost: Counter::new(),
+            rtt: Gauge::new(),
+            rtt_variance: Gauge::new(),
         }
     }
 }

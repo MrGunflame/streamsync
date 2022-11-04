@@ -14,6 +14,7 @@ use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
+use tracing::{event, Level, Span};
 
 use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
@@ -80,6 +81,8 @@ where
     pub mtu: u16,
 
     pub queue: TransmissionQueue,
+
+    pub resource_span: Span,
 }
 
 impl<S> Connection<S>
@@ -213,7 +216,7 @@ where
     }
 
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        tracing::trace!("Connection.poll_write");
+        event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_write");
 
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Write(_)));
@@ -231,7 +234,7 @@ where
     }
 
     fn poll_write_sink(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        tracing::trace!("Connection.poll_write_sink");
+        event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_write_sink");
 
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::WriteSink(_)));
@@ -253,7 +256,7 @@ where
     }
 
     pub fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        tracing::trace!("Connection.poll_close");
+        event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_close");
 
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Close(_)));
@@ -483,6 +486,8 @@ where
 
         let seqnum = packet.packet_sequence_number();
 
+        tracing::trace!("Received packet with sequence {}", seqnum);
+
         let fut = tx.feed(packet);
         let fut = unsafe { std::mem::transmute(fut) };
         self.poll_state = PollState::WriteSink(fut);
@@ -493,6 +498,29 @@ where
         // all missing sequence numbers in case they are being received later out-of-order.
         if self.client_sequence_number != seqnum && self.loss_list.remove(seqnum).is_none() {
             self.loss_list.extend(self.client_sequence_number..seqnum);
+
+            // We attempt to recover the lost packet by sending NAK right away. We don't
+            // actually validate that it reaches its destination. If it gets lost we simply
+            // skip the packet.
+            // let mut builder = Nak::builder();
+            // if self.loss_list.len() > 1 {
+            //     unsafe {
+            //         // SAFETY: We just extended `loss_list` by at least 1.
+            //         let first = self.loss_list.first_unchecked();
+            //         let last = self.loss_list.last_unchecked();
+
+            //         builder = builder.lost_packet_sequence_numbers(first..=last);
+            //     }
+            // } else {
+            //     // SAFETY: We just extended `loss_list` by at least 1.
+            //     unsafe {
+            //         let first = self.loss_list.first_unchecked();
+
+            //         builder = builder.lost_packet_sequence_number(first);
+            //     }
+            // }
+
+            // self.send(builder.build())?;
         }
 
         self.client_sequence_number = seqnum + 1;
@@ -510,6 +538,11 @@ where
             tracing::trace!("Received ACKACK with RTT {}", rtt);
 
             self.rtt.update(rtt);
+
+            self.metrics.rtt.set(self.rtt.rtt as usize);
+            self.metrics
+                .rtt_variance
+                .set(self.rtt.rtt_variance as usize);
         }
 
         Ok(())
@@ -524,6 +557,11 @@ where
         if let ConnectionMode::Request { .. } = self.mode {
             self.rtt.rtt = packet.rtt;
             self.rtt.rtt_variance = packet.rtt_variance;
+
+            self.metrics.rtt.set(self.rtt.rtt as usize);
+            self.metrics
+                .rtt_variance
+                .set(self.rtt.rtt_variance as usize);
 
             // Reply with an ACKACK.
             let packet = AckAck::builder()
@@ -638,6 +676,9 @@ where
 
                     let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
 
+                    self.state().metrics.connections_handshake_current.dec();
+                    self.state().metrics.connections_request_current.inc();
+
                     self.mode = ConnectionMode::Request {
                         stream,
                         message_number: 1,
@@ -668,6 +709,9 @@ where
                             return self.reject(code);
                         }
                     };
+
+                    self.state().metrics.connections_handshake_current.dec();
+                    self.state().metrics.connections_publish_current.inc();
 
                     self.mode = ConnectionMode::Publish(OutputSink::new(sink));
                 }
@@ -841,8 +885,16 @@ where
     S: SessionManager,
 {
     fn drop(&mut self) {
-        self.state().pool.remove(self.id);
-        self.state().metrics.lock().remove(&self.id);
+        let state = self.state();
+
+        state.pool.remove(self.id);
+        state.conn_metrics.lock().remove(&self.id);
+
+        match &self.mode {
+            ConnectionMode::Induction { .. } => state.metrics.connections_handshake_current.dec(),
+            ConnectionMode::Publish(_) => state.metrics.connections_publish_current.dec(),
+            ConnectionMode::Request { .. } => state.metrics.connections_request_current.dec(),
+        }
     }
 }
 
@@ -940,6 +992,28 @@ impl LossList {
         }
 
         None
+    }
+
+    /// Returns the first sequence number in the `LossList` without doing a bounds check.
+    ///
+    /// # Safety
+    ///
+    /// This method results in undefined behavoir if `self.len() == 0`.
+    #[inline]
+    pub unsafe fn first_unchecked(&mut self) -> u32 {
+        let (seq, _) = unsafe { self.inner.get_unchecked(0) };
+        *seq
+    }
+
+    /// Returns the last sequence number in the `LossList` without doing a bounds check.
+    ///
+    /// # Safety
+    ///
+    /// This method results in undefined behavoir if `self.len() == 0`.
+    #[inline]
+    pub unsafe fn last_unchecked(&mut self) -> u32 {
+        let (seq, _) = unsafe { self.inner.get_unchecked(self.len() - 1) };
+        *seq
     }
 
     fn push_in(&mut self, seq: u32, now: Instant) {

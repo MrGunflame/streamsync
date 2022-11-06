@@ -7,12 +7,15 @@ pub struct Shared<T>(NonNull<T>);
 
 impl<T> Shared<T> {
     /// Returns a shared reference to the value.
+    #[inline]
     pub unsafe fn as_ref<'a>(&self) -> &'a T {
+        // SAFETY: The caller must guarantee all safety conditions are met.
         unsafe { self.0.as_ref() }
     }
 }
 
 impl<T> From<&T> for Shared<T> {
+    #[inline]
     fn from(src: &T) -> Self {
         Self(src.into())
     }

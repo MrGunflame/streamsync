@@ -1,12 +1,15 @@
 //! SRT Output sink
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hint::unreachable_unchecked;
 use std::num::Wrapping;
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{ready, Context, Poll, Waker};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::Sink;
+use futures::sink::Feed;
+use futures::{Future, FutureExt, Sink, Stream, StreamExt};
+use tokio::time::Sleep;
 
 use crate::session::{LiveSink, SessionManager};
 
@@ -26,8 +29,7 @@ where
     next_msgnum: Wrapping<u32>,
     sink: LiveSink<S::Sink>,
     queue: BufferQueue,
-    skip_counter: u8,
-    poll_state: PollState,
+    latency: u16,
 }
 
 impl<S> OutputSink<S>
@@ -35,13 +37,33 @@ where
     S: SessionManager,
 {
     /// Creates a new `OutputSink` using `sink` as the underlying [`Sink`].
-    pub fn new(sink: LiveSink<S::Sink>) -> Self {
+    pub fn new(sink: LiveSink<S::Sink>, latency: u16) -> Self {
         Self {
             next_msgnum: Wrapping(1),
             sink,
-            queue: BufferQueue::new(),
-            skip_counter: 0,
-            poll_state: PollState::Ready,
+            queue: BufferQueue::new(latency),
+            latency,
+        }
+    }
+
+    pub fn push(&mut self, packet: DataPacket) {
+        let msgnum = packet.message_number();
+
+        if self.next_msgnum.0 > msgnum {
+            tracing::trace!("Segment {} received too late", msgnum);
+            return;
+        }
+
+        self.queue.push(msgnum, Instant::now(), packet.data);
+
+        if self.next_msgnum.0 == msgnum {
+            tracing::trace!("Segment {} is in order", msgnum);
+        } else {
+            tracing::trace!(
+                "Segment {} is out of order (missing {})",
+                msgnum,
+                self.next_msgnum
+            );
         }
     }
 
@@ -53,84 +75,35 @@ where
         self: Pin<&mut Self>,
     ) -> (
         Pin<&mut LiveSink<S::Sink>>,
-        &mut BufferQueue,
+        Pin<&mut BufferQueue>,
         &mut Wrapping<u32>,
-        &mut u8,
-        &mut PollState,
     ) {
         let this = unsafe { self.get_unchecked_mut() };
 
         let sink = unsafe { Pin::new_unchecked(&mut this.sink) };
-        let queue = &mut this.queue;
+        let queue = unsafe { Pin::new_unchecked(&mut this.queue) };
         let next_msgnum = &mut this.next_msgnum;
-        let skip_counter = &mut this.skip_counter;
-        let poll_state = &mut this.poll_state;
 
-        (sink, queue, next_msgnum, skip_counter, poll_state)
+        (sink, queue, next_msgnum)
     }
 
-    fn poll_write(
+    pub fn poll(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), <Self as Sink<DataPacket>>::Error>> {
-        #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::Write));
+        let (mut sink, mut queue, next_msgnum) = self.project();
 
-        let (mut sink, queue, next_msgnum, _, poll_state) = self.project();
+        ready!(queue.as_mut().poll_ready(cx));
 
         if let Err(err) = ready!(sink.as_mut().poll_ready(cx)) {
             return Poll::Ready(Err(err));
         }
 
-        match queue.remove(next_msgnum.0) {
-            Some(buf) => {
-                sink.start_send(buf.into())?;
-                *next_msgnum += 1;
+        let queue = unsafe { queue.get_unchecked_mut() };
 
-                *poll_state = PollState::Write;
-            }
-            None => {
-                *poll_state = PollState::Ready;
-            }
-        }
+        let res = sink.start_send(queue.pop().unwrap().into());
 
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_skip_ahead(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), <Self as Sink<DataPacket>>::Error>> {
-        #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::SkipAhead { .. }));
-
-        let target = match self.poll_state {
-            PollState::SkipAhead { target } => target,
-            _ => unsafe { unreachable_unchecked() },
-        };
-
-        let (mut sink, queue, next_msgnum, skip_counter, poll_state) = self.project();
-
-        if let Err(err) = ready!(sink.as_mut().poll_ready(cx)) {
-            return Poll::Ready(Err(err));
-        }
-
-        while next_msgnum.0 <= target {
-            if let Some(buf) = queue.remove(next_msgnum.0) {
-                if let Err(err) = sink.as_mut().start_send(buf.into()) {
-                    return Poll::Ready(Err(err));
-                }
-
-                return Poll::Ready(Ok(()));
-            }
-
-            *next_msgnum += 1;
-        }
-
-        // Catchup done
-        *skip_counter = 0;
-        *poll_state = PollState::Ready;
-        Poll::Ready(Ok(()))
+        Poll::Ready(res)
     }
 }
 
@@ -140,54 +113,13 @@ where
 {
     type Error = <LiveSink<S::Sink> as Sink<Bytes>>::Error;
 
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        loop {
-            match self.poll_state {
-                PollState::Ready => return Poll::Ready(Ok(())),
-                PollState::Write => {
-                    ready!(self.as_mut().poll_write(cx))?;
-                }
-                PollState::SkipAhead { .. } => {
-                    ready!(self.as_mut().poll_skip_ahead(cx))?;
-                }
-            }
-        }
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn start_send(mut self: Pin<&mut Self>, packet: DataPacket) -> Result<(), Self::Error> {
-        let msgnum = packet.message_number();
-
-        if self.next_msgnum.0 > msgnum {
-            tracing::trace!("Segment {} received too late", msgnum);
-            return Ok(());
-        }
-
-        if self.next_msgnum.0 == msgnum {
-            self.skip_counter = self.skip_counter.saturating_sub(1);
-            self.next_msgnum += 1;
-
-            tracing::trace!("Segment {} is in order", msgnum);
-
-            self.as_mut().sink().start_send(packet.data.into())?;
-
-            self.poll_state = PollState::Write;
-        } else {
-            tracing::trace!(
-                "Segment {} is out of order (missing {})",
-                msgnum,
-                self.next_msgnum
-            );
-            self.skip_counter += 1;
-
-            self.queue.insert(msgnum, packet.data);
-
-            if self.skip_counter >= 40 {
-                tracing::trace!("Skip ahead (HEAD {} => {})", self.next_msgnum, msgnum);
-
-                self.poll_state = PollState::SkipAhead { target: msgnum };
-            }
-        }
-
+    fn start_send(self: Pin<&mut Self>, packet: DataPacket) -> Result<(), Self::Error> {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.push(packet);
         Ok(())
     }
 
@@ -195,46 +127,84 @@ where
         self.sink().poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if !self.queue.is_empty() {
-            tracing::debug!("Dropping {} bytes from queue", self.queue.size);
-            self.queue.clear();
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let (sink, queue, _) = self.project();
+
+        if !queue.is_empty() {
+            tracing::debug!("Dropping {} bytes from queue", queue.size);
+
+            let queue = unsafe { queue.get_unchecked_mut() };
+            queue.clear();
         }
 
-        self.sink().poll_close(cx)
+        sink.poll_close(cx)
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 struct BufferQueue {
-    inner: HashMap<u32, Vec<u8>>,
+    queue: VecDeque<(u32, Instant, Vec<u8>)>,
     /// Total size of all buffers combined.
     size: usize,
+    latency: Duration,
+    sleep: WakeableSleep,
 }
 
 impl BufferQueue {
-    pub fn new() -> Self {
+    pub fn new(latency: u16) -> Self {
+        tracing::info!("Initialized SrtSink buffer with {}ms latency", latency);
+
         Self {
-            inner: HashMap::new(),
+            queue: VecDeque::new(),
             size: 0,
+            latency: Duration::from_millis(latency as u64),
+            sleep: WakeableSleep::new(),
         }
     }
 
-    pub fn insert(&mut self, seq: u32, buf: Vec<u8>) {
+    pub fn push(&mut self, seq: u32, time: Instant, buf: Vec<u8>) {
         // We never store empty buffers.
         if buf.len() != 0 {
             self.size += buf.len();
-            self.inner.insert(seq, buf);
+
+            let mut index = 0;
+            while index < self.queue.len() {
+                let elem = self.queue.get(index).unwrap();
+
+                // Insert the element at the position of the missing sequence.
+                if seq < elem.0 {
+                    self.queue.insert(index, (seq, time, buf));
+
+                    if index == 0 {
+                        self.update();
+                    }
+
+                    return;
+                }
+
+                index += 1;
+            }
+
+            self.queue.push_back((seq, time, buf));
+
+            if index == 0 {
+                self.update();
+            }
         }
     }
 
-    pub fn remove(&mut self, seq: u32) -> Option<Vec<u8>> {
-        match self.inner.remove(&seq) {
-            Some(buf) => {
-                self.size -= buf.len();
-                Some(buf)
-            }
-            None => None,
+    pub fn pop_time(&mut self) -> Option<Instant> {
+        let (_, time, _) = self.last()?;
+        time.checked_add(self.latency)
+    }
+
+    pub fn pop(&mut self) -> Option<Vec<u8>> {
+        if self.queue.is_empty() {
+            None
+        } else {
+            self.queue
+                .remove(self.queue.len() - 1)
+                .map(|(_, _, buf)| buf)
         }
     }
 
@@ -243,14 +213,98 @@ impl BufferQueue {
     }
 
     pub fn clear(&mut self) {
-        self.inner.clear();
+        self.queue.clear();
         self.size = 0;
+    }
+
+    fn last(&self) -> Option<&(u32, Instant, Vec<u8>)> {
+        if self.queue.is_empty() {
+            None
+        } else {
+            self.queue.get(self.queue.len() - 1)
+        }
+    }
+
+    fn sleep(self: Pin<&mut Self>) -> Pin<&mut WakeableSleep> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.sleep) }
+    }
+
+    fn update(&mut self) {
+        let time = self.pop_time().unwrap();
+        self.sleep.update(time);
+    }
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+        match self.as_mut().sleep().poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(()) => {
+                let this = unsafe { self.get_unchecked_mut() };
+                this.update();
+                Poll::Ready(true)
+            }
+        }
     }
 }
 
+/// A [`Sleep`] future that can be woken manually.
 #[derive(Debug)]
-enum PollState {
-    Ready,
-    Write,
-    SkipAhead { target: u32 },
+struct WakeableSleep {
+    waker: Option<Waker>,
+    sleep: Option<Sleep>,
+}
+
+impl WakeableSleep {
+    fn new() -> Self {
+        Self {
+            waker: None,
+            sleep: None,
+        }
+    }
+
+    /// Updates the [`Sleep`] future in place and wake the future.
+    fn update(&mut self, deadline: Instant) {
+        let sleep = tokio::time::sleep_until(deadline.into());
+        self.sleep = Some(sleep);
+        self.wake();
+    }
+
+    /// Wake the future manually.
+    fn wake(&self) {
+        if let Some(waker) = &self.waker {
+            waker.wake_by_ref();
+        }
+    }
+
+    fn project(self: Pin<&mut Self>) -> (&mut Option<Waker>, Option<Pin<&mut Sleep>>) {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        let sleep = this
+            .sleep
+            .as_mut()
+            .map(|f| unsafe { Pin::new_unchecked(f) });
+
+        (&mut this.waker, sleep)
+    }
+}
+
+impl Future for WakeableSleep {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let (waker, sleep) = self.project();
+
+        let update_waker = match &waker {
+            Some(waker) => !waker.will_wake(cx.waker()),
+            None => true,
+        };
+
+        if update_waker {
+            *waker = Some(cx.waker().clone());
+        }
+
+        match sleep {
+            Some(sleep) => sleep.poll(cx),
+            None => Poll::Pending,
+        }
+    }
 }

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::sink::{Close, Feed};
-use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
+use futures::{pin_mut, FutureExt, Sink, SinkExt, StreamExt};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
@@ -71,8 +71,7 @@ where
     /// Timestamp of the last packet received by the peer.
     last_time: Instant,
 
-    /// Self-referential struct.
-    poll_state: PollState<S>,
+    poll_state: PollState,
 
     /// Maximum transmission unit, the maximum size for an Ethernet frame. The default is 1500,
     /// which is the maximum size for an Ethernet frame.
@@ -156,62 +155,71 @@ where
         self.start_time.elapsed().as_micros() as u32
     }
 
-    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         tracing::trace!("Connection.poll_read");
 
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Read));
 
+        let this = unsafe { self.get_unchecked_mut() };
+
+        // If the connection is in publish mode we need to drive the output sink forward.
+        if let ConnectionMode::Publish(sink) = &mut this.mode {
+            let sink = unsafe { Pin::new_unchecked(sink) };
+
+            // We don't care about the result, we just want to drive the future forward.
+            let _ = sink.poll(cx);
+        }
+
         // Empty the sending queue before doing anything else.
-        if let Some(packet) = self.queue.pop() {
+        if let Some(packet) = this.queue.pop() {
             // Update connection stats.
             match packet.header.packet_type() {
                 PacketType::Data => {
-                    self.metrics.data_packets_sent.add(1);
-                    self.metrics.data_bytes_sent.add(packet.size());
+                    this.metrics.data_packets_sent.add(1);
+                    this.metrics.data_bytes_sent.add(packet.size());
                 }
                 PacketType::Control => {
-                    self.metrics.ctrl_packets_sent.add(1);
-                    self.metrics.ctrl_bytes_sent.add(packet.size());
+                    this.metrics.ctrl_packets_sent.add(1);
+                    this.metrics.ctrl_bytes_sent.add(packet.size());
                 }
             }
 
-            let socket = self.socket.clone();
-            let addr = self.id.addr;
+            let socket = this.socket.clone();
+            let addr = this.id.addr;
             let fut = Box::pin(async move {
                 let buf = packet.encode_to_vec()?;
                 socket.send_to(&buf, addr).await?;
                 Ok(())
             });
 
-            self.poll_state = PollState::Write(fut);
+            this.poll_state = PollState::Write(fut);
 
             // Immediately move into write state.
             return Poll::Ready(Ok(()));
         }
 
-        match self.incoming.poll_recv(cx) {
+        match this.incoming.poll_recv(cx) {
             Poll::Ready(Some(packet)) => {
-                self.handle_packet(packet)?;
+                this.handle_packet(packet)?;
                 return Poll::Ready(Ok(()));
             }
             Poll::Ready(None) => {
-                self.close()?;
+                this.close()?;
                 return Poll::Ready(Ok(()));
             }
             Poll::Pending => (),
         }
 
-        match self.tick_interval.poll_unpin(cx) {
+        match this.tick_interval.poll_unpin(cx) {
             Poll::Ready(()) => {
-                self.tick()?;
+                this.tick()?;
                 // return Poll::Ready(Ok(()));
             }
             Poll::Pending => (),
         }
 
-        let timestamp = self.timestamp();
-        let this = unsafe { self.get_unchecked_mut() };
+        let timestamp = this.timestamp();
 
         if let ConnectionMode::Request {
             stream,
@@ -275,17 +283,19 @@ where
         self.poll_state = PollState::Read;
     }
 
-    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_write");
 
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Write(_)));
 
-        match &mut self.poll_state {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        match &mut this.poll_state {
             PollState::Write(fut) => match fut.as_mut().poll(cx).map(|_| ()) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(()) => {
-                    self.init_read();
+                    this.init_read();
                     Poll::Ready(Ok(()))
                 }
             },
@@ -293,51 +303,31 @@ where
         }
     }
 
-    fn poll_write_sink(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
-        event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_write_sink");
-
-        #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::WriteSink(_)));
-
-        match &mut self.poll_state {
-            PollState::WriteSink(fut) => {
-                pin_mut!(fut);
-
-                match fut.poll(cx) {
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(_) => {
-                        self.init_read();
-                        Poll::Ready(Ok(()))
-                    }
-                }
-            }
-            _ => unsafe { hint::unreachable_unchecked() },
-        }
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
         event!(parent: &self.resource_span, Level::TRACE, "Connection.poll_close");
 
         #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::Close(_)));
+        assert!(matches!(self.poll_state, PollState::Close));
 
         // TODO: Drain the transmission queue, the assume the connection is dead.
 
-        match &mut self.poll_state {
-            PollState::Close(fut) => {
-                pin_mut!(fut);
+        let this = unsafe { self.get_unchecked_mut() };
 
-                match fut.poll(cx) {
+        match &mut this.mode {
+            ConnectionMode::Publish(sink) => {
+                let sink = unsafe { Pin::new_unchecked(sink) };
+
+                match sink.poll_close(cx) {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Err(err)) => Poll::Ready(Ok(())),
                     Poll::Ready(Ok(())) => {
-                        tracing::debug!("Connection to {} closed", self.id);
-                        self.poll_state = PollState::Closed;
+                        tracing::debug!("Connection to {} closed", this.id);
+                        this.poll_state = PollState::Closed;
                         Poll::Ready(Ok(()))
                     }
                 }
             }
-            _ => unsafe { hint::unreachable_unchecked() },
+            _ => Poll::Ready(Ok(())),
         }
     }
 
@@ -529,14 +519,11 @@ where
     fn close(&mut self) -> Result<()> {
         self.send(Shutdown::builder().build())?;
 
-        if let ConnectionMode::Publish(sink) = &mut self.mode {
+        if let ConnectionMode::Publish(_) = &mut self.mode {
             #[cfg(debug_assertions)]
             assert!(matches!(self.poll_state, PollState::Read));
 
-            let fut = sink.close();
-            let fut = unsafe { std::mem::transmute(fut) };
-
-            self.poll_state = PollState::Close(fut);
+            self.poll_state = PollState::Close;
         } else {
             self.poll_state = PollState::Closed;
         }
@@ -560,9 +547,7 @@ where
 
         tracing::trace!("Received packet with sequence {}", seqnum);
 
-        let fut = tx.feed(packet);
-        let fut = unsafe { std::mem::transmute(fut) };
-        self.poll_state = PollState::WriteSink(fut);
+        tx.push(packet);
 
         // If the sequence number of the packet is not the next expected sequence number
         // and is not already a lost sequence number we lost all sequences up to the
@@ -794,7 +779,7 @@ where
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_publish_current.inc();
 
-                    self.mode = ConnectionMode::Publish(OutputSink::new(sink));
+                    self.mode = ConnectionMode::Publish(OutputSink::new(sink, self.latency));
                 }
                 _ => return self.reject(HandshakeType::REJ_ROGUE),
             }
@@ -901,12 +886,7 @@ where
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                     _ => (),
                 },
-                PollState::WriteSink(_) => match self.as_mut().poll_write_sink(cx) {
-                    Poll::Pending => return Poll::Pending,
-                    Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                    _ => (),
-                },
-                PollState::Close(_) => match self.as_mut().poll_close(cx) {
+                PollState::Close => match self.as_mut().poll_close(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
                     _ => (),
@@ -1244,25 +1224,13 @@ impl Future for TickInterval {
     }
 }
 
-enum PollState<S>
-where
-    S: SessionManager,
-{
+#[derive(Default)]
+enum PollState {
+    #[default]
     Read,
     Write(Pin<Box<dyn Future<Output = Result<()>>>>),
-    WriteSink(Feed<'static, OutputSink<S>, DataPacket>),
-    Close(Close<'static, OutputSink<S>, DataPacket>),
+    Close,
     Closed,
-}
-
-impl<S> Default for PollState<S>
-where
-    S: SessionManager,
-{
-    #[inline]
-    fn default() -> Self {
-        Self::Read
-    }
 }
 
 /// A packet transmission queue.

@@ -20,7 +20,7 @@ use tracing::{event, span, Level, Span};
 use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
 use crate::srt::proto::Nak;
-use crate::srt::HandshakeType;
+use crate::srt::{HandshakeType, VERSION};
 use crate::utils::Shared;
 
 use super::metrics::ConnectionMetrics;
@@ -81,6 +81,13 @@ where
     queue: TransmissionQueue,
 
     resource_span: Span,
+
+    /// The agreed latency before sending a packet to the output. This time window can be used
+    /// for retransmission and reordering of out-of-order packets. The value is agreed to be
+    /// the bigger value of the proposed values of both sides.
+    ///
+    /// The value is in milliseconds, not in microseconds.
+    latency: u16,
 }
 
 impl<S> Connection<S>
@@ -129,6 +136,7 @@ where
             server_sequence_number: Wrapping(seqnum),
             client_sequence_number: Wrapping(seqnum),
             loss_list: LossList::new(),
+            latency: 0,
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -505,6 +513,18 @@ where
         Ok(())
     }
 
+    fn send_prio<T>(&mut self, packet: T) -> Result<()>
+    where
+        T: IsPacket,
+    {
+        let mut packet = packet.upcast();
+        packet.header.timestamp = self.timestamp();
+        packet.header.destination_socket_id = self.id.client_socket_id.0;
+
+        self.queue.push_prio(packet);
+        Ok(())
+    }
+
     /// Closes the connection.
     fn close(&mut self) -> Result<()> {
         self.send(Shutdown::builder().build())?;
@@ -551,28 +571,33 @@ where
         if self.client_sequence_number.0 != seqnum && self.loss_list.remove(seqnum).is_none() {
             self.loss_list.extend(self.client_sequence_number.0..seqnum);
 
-            // We attempt to recover the lost packet by sending NAK right away. We don't
-            // actually validate that it reaches its destination. If it gets lost we simply
-            // skip the packet.
-            // let mut builder = Nak::builder();
-            // if self.loss_list.len() > 1 {
-            //     unsafe {
-            //         // SAFETY: We just extended `loss_list` by at least 1.
-            //         let first = self.loss_list.first_unchecked();
-            //         let last = self.loss_list.last_unchecked();
+            // We attempt to recover the lost packet only if we can expect it to arrive
+            // before we would have already consumed it. If we cannot receive the lost
+            // packet in time we ignore it.
+            if self.rtt.is_reachable(self.latency as u32 * 1000) {
+                // We attempt to recover the lost packet by sending NAK right away. We don't
+                // actually validate that it reaches its destination. If it gets lost we simply
+                // skip the packet.
+                let mut builder = Nak::builder();
+                if self.loss_list.len() > 1 {
+                    unsafe {
+                        // SAFETY: We just extended `loss_list` by at least 1.
+                        let first = self.loss_list.first_unchecked();
+                        let last = self.loss_list.last_unchecked();
 
-            //         builder = builder.lost_packet_sequence_numbers(first..=last);
-            //     }
-            // } else {
-            //     // SAFETY: We just extended `loss_list` by at least 1.
-            //     unsafe {
-            //         let first = self.loss_list.first_unchecked();
+                        builder = builder.lost_packet_sequence_numbers(first..=last);
+                    }
+                } else {
+                    // SAFETY: We just extended `loss_list` by at least 1.
+                    unsafe {
+                        let first = self.loss_list.first_unchecked();
 
-            //         builder = builder.lost_packet_sequence_number(first);
-            //     }
-            // }
+                        builder = builder.lost_packet_sequence_number(first);
+                    }
+                }
 
-            // self.send(builder.build())?;
+                self.send_prio(builder.build())?;
+            }
         }
 
         self.client_sequence_number = Wrapping(seqnum.wrapping_add(1));
@@ -675,6 +700,8 @@ where
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
             ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
 
+            self.latency = ext.sender_tsbpd_delay;
+
             packet.extensions.0.push(HandshakeExtension {
                 extension_type: ExtensionType::HSRSP,
                 extension_length: 3,
@@ -682,6 +709,8 @@ where
             });
 
             packet.extension_field = ExtensionField::HSREQ;
+        } else {
+            return self.reject(HandshakeType::REJ_ROGUE);
         }
 
         // StreamId extension
@@ -769,6 +798,8 @@ where
                 }
                 _ => return self.reject(HandshakeType::REJ_ROGUE),
             }
+        } else {
+            return self.reject(HandshakeType::REJ_ROGUE);
         }
 
         self.send(packet)
@@ -780,7 +811,7 @@ where
 
         let mut packet = HandshakePacket::default();
         packet.header.set_packet_type(PacketType::Control);
-        packet.version = 0x00010501;
+        packet.version = VERSION;
         packet.encryption_field = 0;
         packet.extension_field = ExtensionField::NONE;
         packet.initial_packet_sequence_number = self.server_sequence_number.0;
@@ -1054,6 +1085,8 @@ impl LossList {
     /// This method results in undefined behavoir if `self.len() == 0`.
     #[inline]
     pub unsafe fn first_unchecked(&mut self) -> u32 {
+        debug_assert!(self.len() > 0);
+
         let (seq, _) = unsafe { self.inner.get_unchecked(0) };
         *seq
     }
@@ -1065,6 +1098,8 @@ impl LossList {
     /// This method results in undefined behavoir if `self.len() == 0`.
     #[inline]
     pub unsafe fn last_unchecked(&mut self) -> u32 {
+        debug_assert!(self.len() > 0);
+
         let (seq, _) = unsafe { self.inner.get_unchecked(self.len() - 1) };
         *seq
     }
@@ -1164,6 +1199,13 @@ impl Rtt {
             + (1.0 / 4.0) * self.rtt.abs_diff(new) as f32) as u32;
 
         self.rtt = ((7.0 / 8.0) * self.rtt as f32 + (1.0 / 8.0) * new as f32) as u32;
+    }
+
+    /// Returns `true` if the peer with the current `Rtt` is expected to be reachable in the
+    /// time `n`. `n` is specified in microseconds.
+    #[inline]
+    pub const fn is_reachable(&self, n: u32) -> bool {
+        self.rtt < n
     }
 }
 

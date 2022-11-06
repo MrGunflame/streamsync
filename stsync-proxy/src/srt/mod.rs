@@ -23,6 +23,9 @@ use std::{
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
+/// The SRT version supported by this library.
+pub const VERSION: u32 = 0x00010501;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("io: {0}")]

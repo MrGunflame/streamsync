@@ -57,7 +57,7 @@ used is the [recommended syntax](https://datatracker.ietf.org/doc/html/draft-sha
 `#!::key1=value1,key2=value2,etc...`
 
 The nested syntax is unsupported. Providing an invalid StreamID syntax will result in a 
-`REJ_ROGUE` rejection. From the standard keys three keys are understood any always **required**:
+`REJ_ROGUE` rejection. From the standard keys three keys are understood and always **required**:
 
 | Key | Type                    | Note |
 | --- | ----------------------- | ----
@@ -114,7 +114,7 @@ as that is always avaliable.
 | ------------ | ----- | ---- |
 | Rate Control | `CBR` | Streams with a constant bitrate. This should always be prefered option for streaming. |
 | Bitrate      | ?    | This value heavily depends on your resolution and framerate. |
-| Keyframe Interval | `0` | |
+| Keyframe Interval | `1` | |
 | CPU Usage Preset | `superfast` | |
 | Profile | `high` | |
 | Tune | `zerolatency` | |
@@ -160,6 +160,7 @@ no connections currently. All metrics share a `id` label that uniquely identifie
 
 ### Todo list
 
+- [ ] Workers
 - [ ] TSDBD (especially for the reciver)
 - [ ] AES encryption
 - [ ] A secure way to bootstrap the AES encryption and exchange resource/session ids

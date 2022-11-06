@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::hint;
+use std::num::Wrapping;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -56,8 +57,8 @@ where
     /// Time of the first sent packet.
     start_time: Instant,
 
-    server_sequence_number: u32,
-    client_sequence_number: u32,
+    server_sequence_number: Wrapping<u32>,
+    client_sequence_number: Wrapping<u32>,
 
     mode: ConnectionMode<S>,
 
@@ -125,8 +126,8 @@ where
             mtu: 1500,
             queue: TransmissionQueue::default(),
             resource_span,
-            server_sequence_number: seqnum,
-            client_sequence_number: seqnum,
+            server_sequence_number: Wrapping(seqnum),
+            client_sequence_number: Wrapping(seqnum),
             loss_list: LossList::new(),
         };
 
@@ -217,7 +218,7 @@ where
                         packet.header.set_packet_type(PacketType::Data);
                         packet
                             .header()
-                            .set_packet_sequence_number(this.server_sequence_number);
+                            .set_packet_sequence_number(this.server_sequence_number.0);
                         packet.header().set_message_number(*message_number);
                         packet.header().set_ordered(true);
                         packet.header().set_packet_position(PacketPosition::Full);
@@ -446,8 +447,8 @@ where
             }
 
             let packet = Ack::builder()
-                .acknowledgement_number(self.server_sequence_number)
-                .last_acknowledged_packet_sequence_number(self.client_sequence_number)
+                .acknowledgement_number(self.server_sequence_number.0)
+                .last_acknowledged_packet_sequence_number(self.client_sequence_number.0)
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
                 .avaliable_buffer_size(8192)
@@ -456,7 +457,7 @@ where
                 .receiving_rate(bytes_recv_rate)
                 .build();
 
-            self.inflight_acks.push(self.server_sequence_number);
+            self.inflight_acks.push(self.server_sequence_number.0);
 
             self.server_sequence_number += 1;
 
@@ -479,7 +480,7 @@ where
         packet.header.set_packet_type(PacketType::Data);
         packet
             .header()
-            .set_packet_sequence_number(self.server_sequence_number);
+            .set_packet_sequence_number(self.server_sequence_number.0);
         packet.header().set_message_number(*message_number);
         packet.header().set_ordered(true);
         packet.header().set_packet_position(PacketPosition::Full);
@@ -547,8 +548,8 @@ where
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.client_sequence_number != seqnum && self.loss_list.remove(seqnum).is_none() {
-            self.loss_list.extend(self.client_sequence_number..seqnum);
+        if self.client_sequence_number.0 != seqnum && self.loss_list.remove(seqnum).is_none() {
+            self.loss_list.extend(self.client_sequence_number.0..seqnum);
 
             // We attempt to recover the lost packet by sending NAK right away. We don't
             // actually validate that it reaches its destination. If it gets lost we simply
@@ -574,7 +575,7 @@ where
             // self.send(builder.build())?;
         }
 
-        self.client_sequence_number = seqnum + 1;
+        self.client_sequence_number = Wrapping(seqnum.wrapping_add(1));
 
         Ok(())
     }
@@ -668,7 +669,7 @@ where
 
         packet.syn_cookie = 0;
         packet.srt_socket_id = self.id.server_socket_id.0;
-        packet.initial_packet_sequence_number = self.server_sequence_number;
+        packet.initial_packet_sequence_number = self.server_sequence_number.0;
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
@@ -725,7 +726,7 @@ where
                         }
                     };
 
-                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
+                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number.0);
 
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_request_current.inc();
@@ -782,7 +783,7 @@ where
         packet.version = 0x00010501;
         packet.encryption_field = 0;
         packet.extension_field = ExtensionField::NONE;
-        packet.initial_packet_sequence_number = self.server_sequence_number;
+        packet.initial_packet_sequence_number = self.server_sequence_number.0;
         packet.maximum_transmission_unit_size = self.mtu as u32;
         packet.maximum_flow_window_size = 8192;
         packet.handshake_type = reason;

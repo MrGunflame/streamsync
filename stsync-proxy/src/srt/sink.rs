@@ -1,6 +1,7 @@
 //! SRT Output sink
 use std::collections::HashMap;
 use std::hint::unreachable_unchecked;
+use std::num::Wrapping;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
 
@@ -22,7 +23,7 @@ where
     S: SessionManager,
 {
     /// Sequence number of the next expected segment.
-    next_msgnum: u32,
+    next_msgnum: Wrapping<u32>,
     sink: LiveSink<S::Sink>,
     queue: BufferQueue,
     skip_counter: u8,
@@ -36,7 +37,7 @@ where
     /// Creates a new `OutputSink` using `sink` as the underlying [`Sink`].
     pub fn new(sink: LiveSink<S::Sink>) -> Self {
         Self {
-            next_msgnum: 1,
+            next_msgnum: Wrapping(1),
             sink,
             queue: BufferQueue::new(),
             skip_counter: 0,
@@ -53,7 +54,7 @@ where
     ) -> (
         Pin<&mut LiveSink<S::Sink>>,
         &mut BufferQueue,
-        &mut u32,
+        &mut Wrapping<u32>,
         &mut u8,
         &mut PollState,
     ) {
@@ -81,7 +82,7 @@ where
             return Poll::Ready(Err(err));
         }
 
-        match queue.remove(*next_msgnum) {
+        match queue.remove(next_msgnum.0) {
             Some(buf) => {
                 sink.start_send(buf.into())?;
                 *next_msgnum += 1;
@@ -114,8 +115,8 @@ where
             return Poll::Ready(Err(err));
         }
 
-        while *next_msgnum <= target {
-            if let Some(buf) = queue.remove(*next_msgnum) {
+        while next_msgnum.0 <= target {
+            if let Some(buf) = queue.remove(next_msgnum.0) {
                 if let Err(err) = sink.as_mut().start_send(buf.into()) {
                     return Poll::Ready(Err(err));
                 }
@@ -156,12 +157,12 @@ where
     fn start_send(mut self: Pin<&mut Self>, packet: DataPacket) -> Result<(), Self::Error> {
         let msgnum = packet.message_number();
 
-        if self.next_msgnum > msgnum {
+        if self.next_msgnum.0 > msgnum {
             tracing::trace!("Segment {} received too late", msgnum);
             return Ok(());
         }
 
-        if self.next_msgnum == msgnum {
+        if self.next_msgnum.0 == msgnum {
             self.skip_counter = self.skip_counter.saturating_sub(1);
             self.next_msgnum += 1;
 

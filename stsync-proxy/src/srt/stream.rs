@@ -34,7 +34,7 @@ where
         if seq < self.initial_sequence_number {
             None
         } else {
-            let index = seq - self.initial_sequence_number;
+            let index = seq.wrapping_sub(self.initial_sequence_number);
             self.buffer.get(index as usize)
         }
     }

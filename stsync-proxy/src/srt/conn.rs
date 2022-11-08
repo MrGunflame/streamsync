@@ -568,7 +568,13 @@ where
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.client_sequence_number.0 != seqnum && self.loss_list.remove(seqnum).is_none() {
+        if self.loss_list.remove(seqnum).is_none() && seqnum > self.client_sequence_number.0 {
+            tracing::trace!(
+                "Lost packets with sequences [{}, {})",
+                self.client_sequence_number.0,
+                seqnum
+            );
+
             self.loss_list.extend(self.client_sequence_number.0..seqnum);
 
             // We attempt to recover the lost packet only if we can expect it to arrive
@@ -583,6 +589,13 @@ where
 
                 self.send_prio(builder.build())?;
             }
+        }
+
+        // Discard packets that we didn't expect or arrived too late.
+        // We must make sure to not move the sequence number backwards.
+        if seqnum < self.client_sequence_number.0 {
+            tracing::trace!("Discarded packet with sequence {}", seqnum);
+            return Ok(());
         }
 
         self.client_sequence_number = Wrapping(seqnum.wrapping_add(1));

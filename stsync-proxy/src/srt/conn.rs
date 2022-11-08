@@ -578,23 +578,8 @@ where
                 // We attempt to recover the lost packet by sending NAK right away. We don't
                 // actually validate that it reaches its destination. If it gets lost we simply
                 // skip the packet.
-                let mut builder = Nak::builder();
-                if self.loss_list.len() > 1 {
-                    unsafe {
-                        // SAFETY: We just extended `loss_list` by at least 1.
-                        let first = self.loss_list.first_unchecked();
-                        let last = self.loss_list.last_unchecked();
-
-                        builder = builder.lost_packet_sequence_numbers(first..=last);
-                    }
-                } else {
-                    // SAFETY: We just extended `loss_list` by at least 1.
-                    unsafe {
-                        let first = self.loss_list.first_unchecked();
-
-                        builder = builder.lost_packet_sequence_number(first);
-                    }
-                }
+                let builder = Nak::builder()
+                    .lost_packet_sequence_numbers(self.client_sequence_number.0..seqnum);
 
                 self.send_prio(builder.build())?;
             }

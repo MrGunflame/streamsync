@@ -8,6 +8,7 @@ use futures::Stream;
 use pin_project::pin_project;
 
 use super::buffer::Buffer;
+use super::utils::Sequence;
 
 #[derive(Debug)]
 #[pin_project]
@@ -15,7 +16,7 @@ pub struct SrtStream<S>
 where
     S: Stream<Item = Bytes>,
 {
-    initial_sequence_number: u32,
+    initial_sequence_number: Sequence,
     buffer: Buffer<Bytes>,
     #[pin]
     stream: S,
@@ -25,7 +26,7 @@ impl<S> SrtStream<S>
 where
     S: Stream<Item = Bytes>,
 {
-    pub fn new(stream: S, size: usize, initial_sequence_number: u32) -> Self {
+    pub fn new(stream: S, size: usize, initial_sequence_number: Sequence) -> Self {
         Self {
             initial_sequence_number,
             stream,
@@ -33,11 +34,11 @@ where
         }
     }
 
-    pub fn get(&self, seq: u32) -> Option<&Bytes> {
+    pub fn get(&self, seq: Sequence) -> Option<&Bytes> {
         if seq < self.initial_sequence_number {
             None
         } else {
-            let index = seq.wrapping_sub(self.initial_sequence_number);
+            let index = (seq - self.initial_sequence_number).to_u32();
             self.buffer.get(index as usize)
         }
     }

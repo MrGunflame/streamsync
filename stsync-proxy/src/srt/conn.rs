@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::hint;
-use std::num::Wrapping;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -28,6 +27,7 @@ use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
 use super::sink::OutputSink;
 use super::state::{ConnectionId, State};
 use super::stream::SrtStream;
+use super::utils::Sequence;
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
     HandshakePacket, IsPacket, Packet, PacketPosition, PacketType,
@@ -57,8 +57,8 @@ where
     /// Time of the first sent packet.
     start_time: Instant,
 
-    server_sequence_number: Wrapping<u32>,
-    client_sequence_number: Wrapping<u32>,
+    server_sequence_number: Sequence,
+    client_sequence_number: Sequence,
 
     mode: ConnectionMode<S>,
 
@@ -133,8 +133,8 @@ where
             mtu: 1500,
             queue: TransmissionQueue::default(),
             resource_span,
-            server_sequence_number: Wrapping(seqnum),
-            client_sequence_number: Wrapping(seqnum),
+            server_sequence_number: Sequence::new(seqnum),
+            client_sequence_number: Sequence::new(seqnum),
             loss_list: LossList::new(),
             latency: 0,
         };
@@ -226,7 +226,7 @@ where
                         packet.header.set_packet_type(PacketType::Data);
                         packet
                             .header()
-                            .set_packet_sequence_number(this.server_sequence_number.0);
+                            .set_packet_sequence_number(this.server_sequence_number.to_u32());
                         packet.header().set_message_number(*message_number);
                         packet.header().set_ordered(true);
                         packet.header().set_packet_position(PacketPosition::Full);
@@ -455,8 +455,8 @@ where
             }
 
             let packet = Ack::builder()
-                .acknowledgement_number(self.server_sequence_number.0)
-                .last_acknowledged_packet_sequence_number(self.client_sequence_number.0)
+                .acknowledgement_number(self.server_sequence_number.to_u32())
+                .last_acknowledged_packet_sequence_number(self.client_sequence_number.to_u32())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
                 .avaliable_buffer_size(8192)
@@ -465,7 +465,7 @@ where
                 .receiving_rate(bytes_recv_rate)
                 .build();
 
-            self.inflight_acks.push(self.server_sequence_number.0);
+            self.inflight_acks.push(self.server_sequence_number);
 
             self.server_sequence_number += 1;
 
@@ -488,7 +488,7 @@ where
         packet.header.set_packet_type(PacketType::Data);
         packet
             .header()
-            .set_packet_sequence_number(self.server_sequence_number.0);
+            .set_packet_sequence_number(self.server_sequence_number.to_u32());
         packet.header().set_message_number(*message_number);
         packet.header().set_ordered(true);
         packet.header().set_packet_position(PacketPosition::Full);
@@ -556,7 +556,7 @@ where
             _ => return Ok(()),
         };
 
-        let seqnum = packet.packet_sequence_number();
+        let seqnum = Sequence::new(packet.packet_sequence_number());
 
         tracing::trace!("Received packet with sequence {}", seqnum);
 
@@ -568,14 +568,15 @@ where
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.loss_list.remove(seqnum).is_none() && seqnum > self.client_sequence_number.0 {
+        if self.loss_list.remove(seqnum).is_none() && seqnum > self.client_sequence_number {
             tracing::trace!(
                 "Lost packets with sequences [{}, {})",
-                self.client_sequence_number.0,
+                self.client_sequence_number,
                 seqnum
             );
 
-            self.loss_list.extend(self.client_sequence_number.0..seqnum);
+            self.loss_list
+                .extend(self.client_sequence_number.to_u32()..seqnum.to_u32());
 
             // We attempt to recover the lost packet only if we can expect it to arrive
             // before we would have already consumed it. If we cannot receive the lost
@@ -584,8 +585,9 @@ where
                 // We attempt to recover the lost packet by sending NAK right away. We don't
                 // actually validate that it reaches its destination. If it gets lost we simply
                 // skip the packet.
-                let builder = Nak::builder()
-                    .lost_packet_sequence_numbers(self.client_sequence_number.0..seqnum);
+                let builder = Nak::builder().lost_packet_sequence_numbers(
+                    self.client_sequence_number.to_u32()..seqnum.to_u32(),
+                );
 
                 self.send_prio(builder.build())?;
             }
@@ -593,12 +595,12 @@ where
 
         // Discard packets that we didn't expect or arrived too late.
         // We must make sure to not move the sequence number backwards.
-        if seqnum < self.client_sequence_number.0 {
+        if seqnum < self.client_sequence_number {
             tracing::trace!("Discarded packet with sequence {}", seqnum);
             return Ok(());
         }
 
-        self.client_sequence_number = Wrapping(seqnum.wrapping_add(1));
+        self.client_sequence_number = seqnum + 1;
 
         Ok(())
     }
@@ -608,7 +610,10 @@ where
     }
 
     fn handle_ackack(&mut self, packet: AckAck) -> Result<()> {
-        if let Some(ts) = self.inflight_acks.remove(packet.acknowledgement_number()) {
+        if let Some(ts) = self
+            .inflight_acks
+            .remove(packet.acknowledgement_number().into())
+        {
             let rtt = ts.elapsed().as_micros() as u32;
             tracing::trace!("Received ACKACK with RTT {}", rtt);
 
@@ -692,7 +697,7 @@ where
 
         packet.syn_cookie = 0;
         packet.srt_socket_id = self.id.server_socket_id.0;
-        packet.initial_packet_sequence_number = self.server_sequence_number.0;
+        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
@@ -753,7 +758,7 @@ where
                         }
                     };
 
-                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number.0);
+                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
 
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_request_current.inc();
@@ -812,7 +817,7 @@ where
         packet.version = VERSION;
         packet.encryption_field = 0;
         packet.extension_field = ExtensionField::NONE;
-        packet.initial_packet_sequence_number = self.server_sequence_number.0;
+        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
         packet.maximum_transmission_unit_size = self.mtu as u32;
         packet.maximum_flow_window_size = 8192;
         packet.handshake_type = reason;
@@ -836,7 +841,7 @@ where
         };
 
         for seq in packet.lost_packet_sequence_numbers.iter() {
-            match stream.get(seq).map(|buf| buf.to_vec()) {
+            match stream.get(seq.into()).map(|buf| buf.to_vec()) {
                 Some(buf) => {
                     // TODO: Keep track of message numbers.
                     let mut packet = DataPacket::default();
@@ -1027,7 +1032,7 @@ impl Eq for ConnectionHandle {}
 /// to push new sequence numbers that are greater than the last one.
 #[derive(Clone, Debug, Default)]
 pub struct LossList {
-    inner: Vec<(u32, Instant)>,
+    inner: Vec<(Sequence, Instant)>,
 }
 
 impl LossList {
@@ -1054,7 +1059,7 @@ impl LossList {
     ///
     /// Panics when `debug_assertions` is enabled and the pushed sequence number `seq` is smaller
     /// than the last pushed sequence number on the stack.
-    pub fn push(&mut self, seq: u32) {
+    pub fn push(&mut self, seq: Sequence) {
         self.push_in(seq, Instant::now())
     }
 
@@ -1067,7 +1072,7 @@ impl LossList {
 
     /// Removes a sequence number from the `LossList`. Returns the [`Instant`] at which the
     /// sequence number was inserted.
-    pub fn remove(&mut self, seq: u32) -> Option<Instant> {
+    pub fn remove(&mut self, seq: Sequence) -> Option<Instant> {
         if let Ok(index) = self.inner.binary_search_by(|(n, _)| n.cmp(&seq)) {
             let (_, ts) = self.inner.remove(index);
             return Some(ts);
@@ -1082,7 +1087,7 @@ impl LossList {
     ///
     /// This method results in undefined behavoir if `self.len() == 0`.
     #[inline]
-    pub unsafe fn first_unchecked(&mut self) -> u32 {
+    pub unsafe fn first_unchecked(&mut self) -> Sequence {
         debug_assert!(self.len() > 0);
 
         let (seq, _) = unsafe { self.inner.get_unchecked(0) };
@@ -1095,14 +1100,14 @@ impl LossList {
     ///
     /// This method results in undefined behavoir if `self.len() == 0`.
     #[inline]
-    pub unsafe fn last_unchecked(&mut self) -> u32 {
+    pub unsafe fn last_unchecked(&mut self) -> Sequence {
         debug_assert!(self.len() > 0);
 
         let (seq, _) = unsafe { self.inner.get_unchecked(self.len() - 1) };
         *seq
     }
 
-    fn push_in(&mut self, seq: u32, now: Instant) {
+    fn push_in(&mut self, seq: Sequence, now: Instant) {
         #[cfg(debug_assertions)]
         if let Some((n, _)) = self.inner.last() {
             if seq <= *n {
@@ -1132,10 +1137,13 @@ impl LossList {
     }
 }
 
-impl Extend<u32> for LossList {
+impl<S> Extend<S> for LossList
+where
+    S: Into<Sequence>,
+{
     fn extend<T>(&mut self, iter: T)
     where
-        T: IntoIterator<Item = u32>,
+        T: IntoIterator<Item = S>,
     {
         let iter = iter.into_iter();
 
@@ -1145,7 +1153,7 @@ impl Extend<u32> for LossList {
 
         let now = Instant::now();
         for seq in iter {
-            self.push_in(seq, now);
+            self.push_in(seq.into(), now);
         }
     }
 }

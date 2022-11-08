@@ -7,6 +7,7 @@ use std::task::{ready, Context, Poll};
 
 use bytes::Bytes;
 use futures::Sink;
+use pin_project::pin_project;
 
 use crate::session::{LiveSink, SessionManager};
 
@@ -18,16 +19,18 @@ use super::DataPacket;
 /// stream. An `OutputSink` is responsible for reassembling the stream of the sender by reordering
 /// out-of-order segments, dropping duplicate and too-late packets.
 #[derive(Debug)]
+#[pin_project]
 pub struct OutputSink<S>
 where
     S: SessionManager,
 {
     /// Sequence number of the next expected segment.
     next_msgnum: Wrapping<u32>,
-    sink: LiveSink<S::Sink>,
     queue: BufferQueue,
     skip_counter: u8,
     poll_state: PollState,
+    #[pin]
+    sink: LiveSink<S::Sink>,
 }
 
 impl<S> OutputSink<S>
@@ -45,30 +48,6 @@ where
         }
     }
 
-    fn sink(self: Pin<&mut Self>) -> Pin<&mut LiveSink<S::Sink>> {
-        unsafe { self.map_unchecked_mut(|this| &mut this.sink) }
-    }
-
-    fn project(
-        self: Pin<&mut Self>,
-    ) -> (
-        Pin<&mut LiveSink<S::Sink>>,
-        &mut BufferQueue,
-        &mut Wrapping<u32>,
-        &mut u8,
-        &mut PollState,
-    ) {
-        let this = unsafe { self.get_unchecked_mut() };
-
-        let sink = unsafe { Pin::new_unchecked(&mut this.sink) };
-        let queue = &mut this.queue;
-        let next_msgnum = &mut this.next_msgnum;
-        let skip_counter = &mut this.skip_counter;
-        let poll_state = &mut this.poll_state;
-
-        (sink, queue, next_msgnum, skip_counter, poll_state)
-    }
-
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -76,21 +55,21 @@ where
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Write));
 
-        let (mut sink, queue, next_msgnum, _, poll_state) = self.project();
+        let mut this = self.project();
 
-        if let Err(err) = ready!(sink.as_mut().poll_ready(cx)) {
+        if let Err(err) = ready!(this.sink.as_mut().poll_ready(cx)) {
             return Poll::Ready(Err(err));
         }
 
-        match queue.remove(next_msgnum.0) {
+        match this.queue.remove(this.next_msgnum.0) {
             Some(buf) => {
-                sink.start_send(buf.into())?;
-                *next_msgnum += 1;
+                this.sink.start_send(buf.into())?;
+                *this.next_msgnum += 1;
 
-                *poll_state = PollState::Write;
+                *this.poll_state = PollState::Write;
             }
             None => {
-                *poll_state = PollState::Ready;
+                *this.poll_state = PollState::Ready;
             }
         }
 
@@ -109,27 +88,27 @@ where
             _ => unsafe { unreachable_unchecked() },
         };
 
-        let (mut sink, queue, next_msgnum, skip_counter, poll_state) = self.project();
+        let mut this = self.project();
 
-        if let Err(err) = ready!(sink.as_mut().poll_ready(cx)) {
+        if let Err(err) = ready!(this.sink.as_mut().poll_ready(cx)) {
             return Poll::Ready(Err(err));
         }
 
-        while next_msgnum.0 <= target {
-            if let Some(buf) = queue.remove(next_msgnum.0) {
-                if let Err(err) = sink.as_mut().start_send(buf.into()) {
+        while this.next_msgnum.0 <= target {
+            if let Some(buf) = this.queue.remove(this.next_msgnum.0) {
+                if let Err(err) = this.sink.as_mut().start_send(buf.into()) {
                     return Poll::Ready(Err(err));
                 }
 
                 return Poll::Ready(Ok(()));
             }
 
-            *next_msgnum += 1;
+            *this.next_msgnum += 1;
         }
 
         // Catchup done
-        *skip_counter = 0;
-        *poll_state = PollState::Ready;
+        *this.skip_counter = 0;
+        *this.poll_state = PollState::Ready;
         Poll::Ready(Ok(()))
     }
 }
@@ -168,9 +147,11 @@ where
 
             tracing::trace!("Segment {} is in order", msgnum);
 
-            self.as_mut().sink().start_send(packet.data.into())?;
+            let this = self.project();
 
-            self.poll_state = PollState::Write;
+            this.sink.start_send(packet.data.into())?;
+
+            *this.poll_state = PollState::Write;
         } else {
             tracing::trace!(
                 "Segment {} is out of order (missing {})",
@@ -192,16 +173,19 @@ where
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.sink().poll_flush(cx)
+        let this = self.project();
+        this.sink.poll_flush(cx)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if !self.queue.is_empty() {
-            tracing::debug!("Dropping {} bytes from queue", self.queue.size);
-            self.queue.clear();
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.project();
+
+        if !this.queue.is_empty() {
+            tracing::debug!("Dropping {} bytes from queue", this.queue.size);
+            this.queue.clear();
         }
 
-        self.sink().poll_close(cx)
+        this.sink.poll_close(cx)
     }
 }
 

@@ -24,6 +24,7 @@ hyper = { version = "0.14.20", features = ["http1", "http2", "server"] }
 ahash = "0.8.0"
 parking_lot = "0.12.1"
 clap = { version = "4.0.18", features = ["derive"] }
+pin-project = "1.0.12"
 
 [profile.release]
 opt-level = 3

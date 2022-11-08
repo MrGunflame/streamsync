@@ -5,17 +5,20 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::Stream;
+use pin_project::pin_project;
 
 use super::buffer::Buffer;
 
 #[derive(Debug)]
+#[pin_project]
 pub struct SrtStream<S>
 where
     S: Stream<Item = Bytes>,
 {
     initial_sequence_number: u32,
-    stream: S,
     buffer: Buffer<Bytes>,
+    #[pin]
+    stream: S,
 }
 
 impl<S> SrtStream<S>
@@ -38,15 +41,6 @@ where
             self.buffer.get(index as usize)
         }
     }
-
-    fn project(self: Pin<&mut Self>) -> (Pin<&mut S>, &mut Buffer<Bytes>) {
-        let this = unsafe { self.get_unchecked_mut() };
-
-        let stream = unsafe { Pin::new_unchecked(&mut this.stream) };
-        let buffer = &mut this.buffer;
-
-        (stream, buffer)
-    }
 }
 
 impl<S> Stream for SrtStream<S>
@@ -56,12 +50,12 @@ where
     type Item = Bytes;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let (stream, buffer) = self.project();
+        let this = self.project();
 
-        match stream.poll_next(cx) {
+        match this.stream.poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(val)) => {
-                buffer.push(val.clone());
+                this.buffer.push(val.clone());
                 Poll::Ready(Some(val))
             }
             Poll::Ready(None) => Poll::Ready(None),

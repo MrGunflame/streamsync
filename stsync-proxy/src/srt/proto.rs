@@ -2,7 +2,7 @@ pub mod builder;
 
 use std::{
     io::{Cursor, Read, Write},
-    ops::RangeInclusive,
+    ops::{Range, RangeInclusive},
 };
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
@@ -550,6 +550,16 @@ impl From<u32> for SequenceNumbers {
 impl From<RangeInclusive<u32>> for SequenceNumbers {
     fn from(src: RangeInclusive<u32>) -> Self {
         Self::Range(src)
+    }
+}
+
+impl From<Range<u32>> for SequenceNumbers {
+    fn from(src: Range<u32>) -> Self {
+        if src.len() == 1 {
+            Self::from(src.start)
+        } else {
+            Self::from(src.start..src.end - 1)
+        }
     }
 }
 

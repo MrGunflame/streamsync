@@ -191,7 +191,7 @@ where
 
 #[derive(Clone, Debug, Default)]
 struct BufferQueue {
-    inner: HashMap<u32, Vec<u8>>,
+    inner: HashMap<u32, Bytes>,
     /// Total size of all buffers combined.
     size: usize,
 }
@@ -204,7 +204,7 @@ impl BufferQueue {
         }
     }
 
-    pub fn insert(&mut self, seq: u32, buf: Vec<u8>) {
+    pub fn insert(&mut self, seq: u32, buf: Bytes) {
         // We never store empty buffers.
         if buf.len() != 0 {
             self.size += buf.len();
@@ -212,7 +212,7 @@ impl BufferQueue {
         }
     }
 
-    pub fn remove(&mut self, seq: u32) -> Option<Vec<u8>> {
+    pub fn remove(&mut self, seq: u32) -> Option<Bytes> {
         match self.inner.remove(&seq) {
             Some(buf) => {
                 self.size -= buf.len();

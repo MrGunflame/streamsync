@@ -32,7 +32,7 @@ impl IsPacket for Keepalive {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: vec![0, 0, 0, 0],
+            body: vec![0, 0, 0, 0].into(),
         }
     }
 
@@ -132,7 +132,7 @@ impl IsPacket for Ack {
 
         Packet {
             header: self.header,
-            body,
+            body: body.into(),
         }
     }
 
@@ -238,7 +238,7 @@ impl IsPacket for AckAck {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: vec![0, 0, 0, 0],
+            body: vec![0, 0, 0, 0].into(),
         }
     }
 
@@ -293,7 +293,7 @@ impl IsPacket for Nak {
 
         Packet {
             header: self.header,
-            body,
+            body: body.into(),
         }
     }
 
@@ -339,7 +339,7 @@ impl IsPacket for Shutdown {
     fn upcast(self) -> Packet {
         Packet {
             header: self.header,
-            body: vec![0, 0, 0, 0],
+            body: vec![0, 0, 0, 0].into(),
         }
     }
 
@@ -387,7 +387,7 @@ impl IsPacket for DropRequest {
 
         Packet {
             header: self.header,
-            body,
+            body: body.into(),
         }
     }
 

@@ -2,6 +2,8 @@ use std::io::{self, Read, Write};
 use std::mem::{self, MaybeUninit};
 use std::ops::{Add, BitAnd, BitOr, Deref, DerefMut, Range, Shl, Shr, Sub};
 
+use bytes::BytesMut;
+
 pub trait Decode: Sized {
     type Error;
 
@@ -353,6 +355,23 @@ uint_newtype! {
     U32, u32,
     U64, u64,
     U128, u128,
+}
+
+impl Decode for bytes::Bytes {
+    type Error = io::Error;
+
+    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    where
+        R: Read,
+    {
+        let mut buf = Vec::decode(reader)?;
+
+        // TODO: There's no need to do any copying here, we can just leak the Vec
+        // and reference the underlying buffer.
+        let mut bytes = BytesMut::with_capacity(buf.len());
+        bytes.extend_from_slice(&buf);
+        Ok(bytes.freeze())
+    }
 }
 
 #[cfg(test)]

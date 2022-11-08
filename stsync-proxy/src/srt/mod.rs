@@ -22,6 +22,8 @@ use std::{
     str::FromStr,
 };
 
+use bytes::Bytes;
+
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
 /// The SRT version supported by this library.
@@ -142,7 +144,7 @@ unsafe impl Zeroable for Header {}
 #[derive(Clone, Debug, Default)]
 pub struct DataPacket {
     header: Header,
-    data: Vec<u8>,
+    data: Bytes,
 }
 
 impl DataPacket {
@@ -473,7 +475,7 @@ impl IsPacket for HandshakePacket {
 
         Packet {
             header: self.header,
-            body,
+            body: body.into(),
         }
     }
 
@@ -718,7 +720,7 @@ impl Decode for HandshakeType {
 #[derive(Clone, Debug)]
 pub struct Packet {
     header: Header,
-    body: Vec<u8>,
+    body: Bytes,
 }
 
 impl IsPacket for Packet {
@@ -762,7 +764,7 @@ impl Encode for Packet {
     }
 
     fn size_hint(&self) -> usize {
-        Encode::size_hint(&self.header) + Encode::size_hint(self.body.as_slice())
+        Encode::size_hint(&self.header) + self.body.len()
     }
 }
 
@@ -774,7 +776,7 @@ impl Decode for Packet {
         R: Read,
     {
         let header = Header::decode(&mut reader)?;
-        let body = Vec::decode(reader)?;
+        let body = Bytes::decode(reader)?;
 
         Ok(Self { header, body })
     }

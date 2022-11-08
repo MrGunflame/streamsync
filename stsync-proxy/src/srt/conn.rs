@@ -841,7 +841,7 @@ where
         };
 
         for seq in packet.lost_packet_sequence_numbers.iter() {
-            match stream.get(seq.into()).map(|buf| buf.to_vec()) {
+            match stream.get(seq.into()).cloned() {
                 Some(buf) => {
                     // TODO: Keep track of message numbers.
                     let mut packet = DataPacket::default();
@@ -1355,9 +1355,9 @@ mod tests {
         let now = Instant::now();
 
         let mut list = LossList::new();
-        list.push_in(1, now);
-        list.push_in(2, now + Duration::new(1, 0));
-        list.push_in(3, now + Duration::new(2, 0));
+        list.push_in(1.into(), now);
+        list.push_in(2.into(), now + Duration::new(1, 0));
+        list.push_in(3.into(), now + Duration::new(2, 0));
         assert_eq!(list.len(), 3);
 
         let rtt = Rtt::new();

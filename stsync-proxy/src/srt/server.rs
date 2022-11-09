@@ -1,4 +1,5 @@
-use futures::FutureExt;
+use futures::stream::FuturesUnordered;
+use futures::{FutureExt, StreamExt};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::future::Future;
 use std::io::{self};
@@ -9,6 +10,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::net::UdpSocket;
+use tokio::task::JoinHandle;
+use tracing::{event, span, Level};
 
 use super::config::Config;
 use super::state::State;
@@ -23,8 +26,7 @@ where
     S: SessionManager,
 {
     pub state: State<S>,
-    socket: Arc<UdpSocket>,
-    fut: Pin<Box<dyn Future<Output = Result<(), Error>>>>,
+    workers: FuturesUnordered<Worker>,
 }
 
 impl<S> Server<S>
@@ -35,6 +37,7 @@ where
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         socket.set_recv_buffer_size(500_000_000)?;
         socket.bind(&SocketAddr::from_str("0.0.0.0:9999").unwrap().into())?;
+        socket.set_nonblocking(true)?;
 
         let rx = socket.recv_buffer_size()?;
         let tx = socket.send_buffer_size()?;
@@ -44,36 +47,23 @@ where
         tracing::info!("Listening on {}", socket.local_addr()?);
         tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
 
-        let socket = Arc::new(socket);
+        let num_workers = config.workers.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+        });
 
+        let socket = Arc::new(socket);
         let state = State::new(session_manager, config);
 
-        let fut = {
-            let state = state.clone();
-            let socket = socket.clone();
-            Box::pin(async move {
-                loop {
-                    let mut buf = [0; 1500];
-                    let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
-                    tracing::trace!("Got {} bytes from {}", len, addr);
+        let workers = FuturesUnordered::new();
+        for i in 0..num_workers {
+            workers.push(Worker::new(i, socket.clone(), state.clone()));
+        }
 
-                    let packet = match Packet::decode(&buf[..len]) {
-                        Ok(packet) => packet,
-                        Err(err) => {
-                            println!("Failed to decode packet: {}", err);
-                            continue;
-                        }
-                    };
+        tracing::info!("Spawned {} worker threads", num_workers);
 
-                    let socket = socket.clone();
-                    if let Err(err) = handle_message(packet, addr, socket, &state).await {
-                        break Err(err);
-                    }
-                }
-            })
-        };
-
-        Ok(Self { state, socket, fut })
+        Ok(Self { state, workers })
     }
 }
 
@@ -84,9 +74,17 @@ where
     type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.fut.poll_unpin(cx)
+        loop {
+            match self.workers.poll_next_unpin(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(Ok(())),
+                _ => (),
+            }
+        }
     }
 }
+
+unsafe impl<S> Send for Server<S> where S: SessionManager + Send {}
 
 async fn handle_message<S>(
     packet: Packet,
@@ -150,5 +148,57 @@ impl<'a> SrtStream<'a> {
         let buf = packet.upcast().encode_to_vec()?;
         self.socket.send_to(&buf, self.addr).await?;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct Worker {
+    handle: JoinHandle<()>,
+}
+
+impl Worker {
+    pub fn new<S>(ident: usize, socket: Arc<UdpSocket>, state: State<S>) -> Self
+    where
+        S: SessionManager,
+    {
+        let resource_span = span!(Level::TRACE, "Worker");
+
+        let handle = tokio::task::spawn(async move {
+            event!(
+                parent: &resource_span,
+                Level::INFO,
+                "Created worker {}",
+                ident
+            );
+
+            loop {
+                let mut buf = [0; 1500];
+                let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+                tracing::trace!("[{}] Got {} bytes from {}", ident, len, addr);
+
+                let packet = match Packet::decode(&buf[..len]) {
+                    Ok(packet) => packet,
+                    Err(err) => {
+                        tracing::debug!("[{}] Failed to decode packet: {}", ident, err);
+                        continue;
+                    }
+                };
+
+                let socket = socket.clone();
+                if let Err(err) = handle_message(packet, addr, socket, &state).await {
+                    panic!("{}", err);
+                }
+            }
+        });
+
+        Self { handle }
+    }
+}
+
+impl Future for Worker {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.handle.poll_unpin(cx).map(|_| ())
     }
 }

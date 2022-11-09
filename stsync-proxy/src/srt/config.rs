@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
+    pub workers: Option<usize>,
+
     /// The size of `SO_RCVBUF` in bytes.
     pub rcvbuf: usize,
     /// The size of `SO_SNDBUF` in bytes.
@@ -14,6 +16,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            workers: None,
             rcvbuf: 500_000,
             sndbuf: 0,
             mtu: 1500,

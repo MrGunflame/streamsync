@@ -1,22 +1,20 @@
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
-use socket2::{Domain, Protocol, Socket, Type};
 use std::future::Future;
 use std::io::{self};
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{event, span, Level};
 
 use super::config::Config;
 use super::state::State;
-use crate::proto::{Decode, Encode};
+use crate::proto::Decode;
 use crate::session::SessionManager;
+use crate::srt::socket::SrtSocket;
 use crate::srt::state::ConnectionId;
 
 use super::{Error, IsPacket, Packet};
@@ -34,15 +32,10 @@ where
     S: SessionManager,
 {
     pub fn new(session_manager: S, config: Config) -> Result<Self, io::Error> {
-        let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        socket.set_recv_buffer_size(500_000_000)?;
-        socket.bind(&SocketAddr::from_str("0.0.0.0:9999").unwrap().into())?;
-        socket.set_nonblocking(true)?;
+        let socket = SrtSocket::new("0.0.0.0:9999".parse().unwrap())?;
 
         let rx = socket.recv_buffer_size()?;
         let tx = socket.send_buffer_size()?;
-
-        let socket = UdpSocket::from_std(socket.into())?;
 
         tracing::info!("Listening on {}", socket.local_addr()?);
         tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
@@ -89,7 +82,7 @@ unsafe impl<S> Send for Server<S> where S: SessionManager + Send {}
 async fn handle_message<S>(
     packet: Packet,
     addr: SocketAddr,
-    socket: Arc<UdpSocket>,
+    socket: Arc<SrtSocket>,
     state: &State<S>,
 ) -> Result<(), Error>
 where
@@ -135,7 +128,7 @@ where
 
 #[derive(Clone, Debug)]
 pub struct SrtStream<'a> {
-    pub socket: Arc<UdpSocket>,
+    pub socket: Arc<SrtSocket>,
     pub addr: SocketAddr,
     pub _marker: &'a PhantomData<()>,
 }
@@ -145,9 +138,7 @@ impl<'a> SrtStream<'a> {
     where
         T: IsPacket,
     {
-        let buf = packet.upcast().encode_to_vec()?;
-        self.socket.send_to(&buf, self.addr).await?;
-        Ok(())
+        self.socket.send_to(packet, self.addr).await.map(|_| ())
     }
 }
 
@@ -157,7 +148,7 @@ struct Worker {
 }
 
 impl Worker {
-    pub fn new<S>(ident: usize, socket: Arc<UdpSocket>, state: State<S>) -> Self
+    pub fn new<S>(ident: usize, socket: Arc<SrtSocket>, state: State<S>) -> Self
     where
         S: SessionManager,
     {

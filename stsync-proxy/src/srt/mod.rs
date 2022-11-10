@@ -9,6 +9,7 @@ mod metrics;
 pub mod proto;
 pub mod server;
 mod sink;
+mod socket;
 pub mod state;
 mod stream;
 mod utils;

@@ -25,6 +25,7 @@ use crate::utils::Shared;
 use super::metrics::ConnectionMetrics;
 use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
 use super::sink::OutputSink;
+use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
 use super::stream::SrtStream;
 use super::utils::Sequence;
@@ -52,7 +53,7 @@ where
     metrics: Arc<ConnectionMetrics>,
 
     incoming: mpsc::Receiver<Packet>,
-    socket: Arc<UdpSocket>,
+    socket: Arc<SrtSocket>,
 
     /// Time of the first sent packet.
     start_time: Instant,
@@ -104,7 +105,7 @@ where
     pub unsafe fn new(
         id: ConnectionId,
         state: &State<S>,
-        socket: Arc<UdpSocket>,
+        socket: Arc<SrtSocket>,
         seqnum: u32,
         syn_cookie: u32,
     ) -> (Self, ConnectionHandle) {
@@ -179,8 +180,7 @@ where
             let socket = self.socket.clone();
             let addr = self.id.addr;
             let fut = Box::pin(async move {
-                let buf = packet.encode_to_vec()?;
-                socket.send_to(&buf, addr).await?;
+                socket.send_to(packet, addr).await?;
                 Ok(())
             });
 

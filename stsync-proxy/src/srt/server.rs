@@ -3,7 +3,6 @@ use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use std::future::Future;
 use std::io::{self};
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -72,6 +71,7 @@ where
             match self.workers.poll_next_unpin(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(Ok(())),
+                Poll::Ready(Some(Err(err))) => return Poll::Ready(Err(err)),
                 _ => (),
             }
         }
@@ -83,17 +83,13 @@ unsafe impl<S> Send for Server<S> where S: SessionManager + Send {}
 async fn handle_message<S>(
     packet: Packet,
     addr: SocketAddr,
-    socket: Arc<SrtSocket>,
+    socket: &SrtSocket,
     state: &State<S>,
 ) -> Result<(), Error>
 where
     S: SessionManager,
 {
-    let stream = SrtStream {
-        socket,
-        addr,
-        _marker: &PhantomData,
-    };
+    let stream = SrtStream { socket, addr };
 
     // A destination socket id of 0 indicates a handshake request.
     if packet.header.destination_socket_id == 0 {
@@ -129,9 +125,8 @@ where
 
 #[derive(Clone, Debug)]
 pub struct SrtStream<'a> {
-    pub socket: Arc<SrtSocket>,
+    pub socket: &'a SrtSocket,
     pub addr: SocketAddr,
-    pub _marker: &'a PhantomData<()>,
 }
 
 impl<'a> SrtStream<'a> {
@@ -145,7 +140,7 @@ impl<'a> SrtStream<'a> {
 
 #[derive(Debug)]
 struct Worker {
-    handle: JoinHandle<()>,
+    handle: JoinHandle<Result<(), Error>>,
 }
 
 impl Worker {
@@ -165,7 +160,7 @@ impl Worker {
 
             loop {
                 let mut buf = BytesMut::zeroed(1500);
-                let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+                let (len, addr) = socket.recv_from(&mut buf).await?;
                 tracing::trace!("[{}] Got {} bytes from {}", ident, len, addr);
                 buf.truncate(len);
 
@@ -178,9 +173,7 @@ impl Worker {
                 };
 
                 let socket = socket.clone();
-                if let Err(err) = handle_message(packet, addr, socket, &state).await {
-                    panic!("{}", err);
-                }
+                handle_message(packet, addr, &socket, &state).await?;
             }
         });
 
@@ -189,9 +182,9 @@ impl Worker {
 }
 
 impl Future for Worker {
-    type Output = ();
+    type Output = Result<(), Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.handle.poll_unpin(cx).map(|_| ())
+        self.handle.poll_unpin(cx).map(|res| res.unwrap())
     }
 }

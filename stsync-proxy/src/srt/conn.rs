@@ -53,7 +53,7 @@ where
     metrics: Arc<ConnectionMetrics>,
 
     incoming: mpsc::Receiver<Packet>,
-    socket: Arc<SrtSocket>,
+    socket: Shared<SrtSocket>,
 
     /// Time of the first sent packet.
     start_time: Instant,
@@ -105,7 +105,7 @@ where
     pub unsafe fn new(
         id: ConnectionId,
         state: &State<S>,
-        socket: Arc<SrtSocket>,
+        socket: &SrtSocket,
         seqnum: u32,
         syn_cookie: u32,
     ) -> (Self, ConnectionHandle) {
@@ -127,7 +127,7 @@ where
             rtt: Rtt::new(),
             tick_interval: TickInterval::new(),
             start_time: Instant::now(),
-            socket,
+            socket: socket.into(),
             last_time: Instant::now(),
             poll_state: PollState::default(),
             metrics,
@@ -177,10 +177,12 @@ where
                 }
             }
 
-            let socket = self.socket.clone();
+            let socket = self.socket;
             let addr = self.id.addr;
             let fut = Box::pin(async move {
-                socket.send_to(packet, addr).await?;
+                unsafe {
+                    socket.as_ref().send_to(packet, addr).await?;
+                }
                 Ok(())
             });
 

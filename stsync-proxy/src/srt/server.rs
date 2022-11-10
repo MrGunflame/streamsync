@@ -1,3 +1,4 @@
+use bytes::BytesMut;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use std::future::Future;
@@ -163,11 +164,12 @@ impl Worker {
             );
 
             loop {
-                let mut buf = [0; 1500];
+                let mut buf = BytesMut::zeroed(1500);
                 let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
                 tracing::trace!("[{}] Got {} bytes from {}", ident, len, addr);
+                buf.truncate(len);
 
-                let packet = match Packet::decode(&buf[..len]) {
+                let packet = match Packet::decode(&mut buf) {
                     Ok(packet) => packet,
                     Err(err) => {
                         tracing::debug!("[{}] Failed to decode packet: {}", ident, err);

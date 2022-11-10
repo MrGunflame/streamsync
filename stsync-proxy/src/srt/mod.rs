@@ -18,12 +18,12 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     fmt::Debug,
-    io::{self, ErrorKind, Read, Write},
+    io::{self, ErrorKind, Write},
     ops::{BitAnd, BitOr},
     str::FromStr,
 };
 
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
@@ -46,6 +46,12 @@ pub enum Error {
     FromUtf8Error(std::str::Utf8Error),
     #[error("unsupported extension {0:?}")]
     UnsupportedExtension(ExtensionType),
+}
+
+impl From<Infallible> for Error {
+    fn from(err: Infallible) -> Self {
+        match err {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -122,14 +128,14 @@ impl Encode for Header {
 impl Decode for Header {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let seg0 = Decode::decode(&mut reader)?;
-        let seg1 = Decode::decode(&mut reader)?;
-        let timestamp = Decode::decode(&mut reader)?;
-        let destination_socket_id = Decode::decode(&mut reader)?;
+        let seg0 = Decode::decode(&mut bytes)?;
+        let seg1 = Decode::decode(&mut bytes)?;
+        let timestamp = Decode::decode(&mut bytes)?;
+        let destination_socket_id = Decode::decode(&mut bytes)?;
 
         Ok(Self {
             seg0,
@@ -225,19 +231,6 @@ impl Encode for ShutdownPacket {
         W: Write,
     {
         self.header.encode(writer)
-    }
-}
-
-impl Decode for ShutdownPacket {
-    type Error = Error;
-
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
-    where
-        R: Read,
-    {
-        let header = Header::decode(reader)?;
-
-        Ok(Self { header })
     }
 }
 
@@ -434,21 +427,21 @@ impl HandshakePacket {
         Ok(())
     }
 
-    fn decode_body<R>(mut reader: R) -> Result<Self, Error>
+    fn decode_body<B>(mut bytes: B) -> Result<Self, Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let version = u32::decode(&mut reader)?;
-        let encryption_field = u16::decode(&mut reader)?;
-        let extension_field = ExtensionField::decode(&mut reader)?;
-        let initial_packet_sequence_number = u32::decode(&mut reader)?;
-        let maximum_transmission_unit_size = u32::decode(&mut reader)?;
-        let maximum_flow_window_size = u32::decode(&mut reader)?;
-        let handshake_type = HandshakeType::decode(&mut reader)?;
-        let srt_socket_id = u32::decode(&mut reader)?;
-        let syn_cookie = u32::decode(&mut reader)?;
-        let peer_ip_address = u128::decode(&mut reader)?;
-        let extensions = Extensions::decode(reader)?;
+        let version = u32::decode(&mut bytes)?;
+        let encryption_field = u16::decode(&mut bytes)?;
+        let extension_field = ExtensionField::decode(&mut bytes)?;
+        let initial_packet_sequence_number = u32::decode(&mut bytes)?;
+        let maximum_transmission_unit_size = u32::decode(&mut bytes)?;
+        let maximum_flow_window_size = u32::decode(&mut bytes)?;
+        let handshake_type = HandshakeType::decode(&mut bytes)?;
+        let srt_socket_id = u32::decode(&mut bytes)?;
+        let syn_cookie = u32::decode(&mut bytes)?;
+        let peer_ip_address = u128::decode(&mut bytes)?;
+        let extensions = Extensions::decode(&mut bytes)?;
 
         Ok(Self {
             header: Header::default(),
@@ -514,44 +507,6 @@ impl Encode for HandshakePacket {
         self.extensions.encode(&mut writer)?;
 
         Ok(())
-    }
-}
-
-impl Decode for HandshakePacket {
-    type Error = Error;
-
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
-    where
-        R: Read,
-    {
-        let header = Header::decode(&mut reader)?;
-
-        let version = u32::decode(&mut reader)?;
-        let encryption_field = u16::decode(&mut reader)?;
-        let extension_field = ExtensionField::decode(&mut reader)?;
-        let initial_packet_sequence_number = u32::decode(&mut reader)?;
-        let maximum_transmission_unit_size = u32::decode(&mut reader)?;
-        let maximum_flow_window_size = u32::decode(&mut reader)?;
-        let handshake_type = HandshakeType::decode(&mut reader)?;
-        let srt_socket_id = u32::decode(&mut reader)?;
-        let syn_cookie = u32::decode(&mut reader)?;
-        let peer_ip_address = u128::decode(&mut reader)?;
-        let extensions = Extensions::decode(reader)?;
-
-        Ok(Self {
-            header,
-            version,
-            encryption_field,
-            extension_field,
-            initial_packet_sequence_number,
-            maximum_transmission_unit_size,
-            maximum_flow_window_size,
-            handshake_type,
-            srt_socket_id,
-            syn_cookie,
-            peer_ip_address,
-            extensions,
-        })
     }
 }
 
@@ -706,11 +661,11 @@ impl Encode for HandshakeType {
 impl Decode for HandshakeType {
     type Error = Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let n = u32::decode(reader)?;
+        let n = u32::decode(bytes)?;
         match Self::from_u32(n) {
             Some(this) => Ok(this),
             None => Err(Error::InvalidHandshakeType(n)),
@@ -772,12 +727,12 @@ impl Encode for Packet {
 impl Decode for Packet {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let header = Header::decode(&mut reader)?;
-        let body = Bytes::decode(reader)?;
+        let header = Header::decode(&mut bytes)?;
+        let body = Bytes::decode(bytes)?;
 
         Ok(Self { header, body })
     }
@@ -1010,14 +965,14 @@ impl Encode for Extensions {
 impl Decode for Extensions {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
         // TODO: Preallocate
         let mut extensions = Vec::new();
         loop {
-            match HandshakeExtension::decode(&mut reader) {
+            match HandshakeExtension::decode(bytes) {
                 Ok(ext) => {
                     extensions.push(ext);
                 }
@@ -1101,11 +1056,11 @@ impl Encode for ExtensionType {
 impl Decode for ExtensionType {
     type Error = Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let n = u16::decode(reader)?;
+        let n = u16::decode(bytes)?;
         match Self::from_u16(n) {
             Some(t) => Ok(t),
             None => Err(Error::InvalidExtensionType(n)),
@@ -1146,18 +1101,18 @@ impl Encode for HandshakeExtension {
 impl Decode for HandshakeExtension {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let extension_type = ExtensionType::decode(&mut reader)?;
-        let extension_length = u16::decode(&mut reader)?;
+        let extension_type = ExtensionType::decode(bytes)?;
+        let extension_length = u16::decode(bytes)?;
 
         let extension_content = match extension_type {
             ExtensionType::HSREQ | ExtensionType::HSRSP => {
-                ExtensionContent::Handshake(HandshakeExtensionMessage::decode(reader)?)
+                ExtensionContent::Handshake(HandshakeExtensionMessage::decode(bytes)?)
             }
-            ExtensionType::SID => ExtensionContent::StreamId(StreamIdExtension::decode(reader)?),
+            ExtensionType::SID => ExtensionContent::StreamId(StreamIdExtension::decode(bytes)?),
             _ => return Err(Error::UnsupportedExtension(extension_type)),
         };
 
@@ -1196,14 +1151,14 @@ impl Encode for HandshakeExtensionMessage {
 impl Decode for HandshakeExtensionMessage {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let srt_version = u32::decode(&mut reader)?;
-        let srt_flags = HandshakeExtensionFlags::decode(&mut reader)?;
-        let receiver_tsbpd_delay = u16::decode(&mut reader)?;
-        let sender_tsbpd_delay = u16::decode(&mut reader)?;
+        let srt_version = u32::decode(bytes)?;
+        let srt_flags = HandshakeExtensionFlags::decode(bytes)?;
+        let receiver_tsbpd_delay = u16::decode(bytes)?;
+        let sender_tsbpd_delay = u16::decode(bytes)?;
 
         Ok(Self {
             srt_version,
@@ -1294,11 +1249,11 @@ impl Encode for HandshakeExtensionFlags {
 impl Decode for HandshakeExtensionFlags {
     type Error = Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        Ok(Self(u32::decode(reader)?))
+        Ok(Self(u32::decode(bytes)?))
     }
 }
 
@@ -1321,9 +1276,9 @@ impl Encode for KeyMaterialExtension {
 impl Decode for KeyMaterialExtension {
     type Error = Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
         Ok(Self {})
     }
@@ -1391,11 +1346,11 @@ impl Encode for StreamIdExtension {
 impl Decode for StreamIdExtension {
     type Error = Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let mut vec = Vec::decode(reader)?;
+        let mut vec = Vec::decode(bytes)?;
         let mut buf = &mut *vec;
 
         let mut string = String::with_capacity(buf.len());
@@ -1533,11 +1488,11 @@ impl Encode for ExtensionField {
 impl Decode for ExtensionField {
     type Error = io::Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        Ok(Self(u16::decode(reader)?))
+        Ok(Self(u16::decode(bytes)?))
     }
 }
 
@@ -1596,12 +1551,12 @@ mod tests {
 
     #[test]
     fn test_streamid_extension() {
-        let buf = [
+        let mut buf: &[u8] = &[
             0x3a, 0x3a, 0x21, 0x23, 0x65, 0x72, 0x3d, 0x6d, 0x73, 0x65, 0x75, 0x71, 0x3d, 0x72,
             0x2c, 0x74, 0x35, 0x33, 0x32, 0x31,
         ];
 
-        let ext = StreamIdExtension::decode(&buf[..]).unwrap();
+        let ext = StreamIdExtension::decode(&mut buf).unwrap();
         assert_eq!(ext.content, "#!::m=request,r=1235");
 
         assert_eq!(ext.encode_to_vec().unwrap(), buf);

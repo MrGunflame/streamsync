@@ -5,6 +5,9 @@ use std::{
     ops::{Range, RangeInclusive},
 };
 
+use bytes::Buf;
+use streamsync_macros::Packet;
+
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
 use self::builder::{
@@ -57,7 +60,7 @@ impl Encode for Keepalive {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct Ack {
     pub header: Header,
     pub last_acknowledged_packet_sequence_number: u32,
@@ -96,30 +99,6 @@ impl Ack {
         self.receiving_rate.encode(&mut writer)?;
 
         Ok(())
-    }
-
-    fn decode_body<R>(mut reader: R, header: Header) -> Result<Self, Error>
-    where
-        R: Read,
-    {
-        let last_acknowledged_packet_sequence_number = u32::decode(&mut reader)?;
-        let rtt = u32::decode(&mut reader)?;
-        let rtt_variance = u32::decode(&mut reader)?;
-        let avaliable_buffer_size = u32::decode(&mut reader)?;
-        let packets_receiving_rate = u32::decode(&mut reader)?;
-        let estimated_link_capacity = u32::decode(&mut reader)?;
-        let receiving_rate = u32::decode(&mut reader)?;
-
-        Ok(Self {
-            header,
-            last_acknowledged_packet_sequence_number,
-            rtt,
-            rtt_variance,
-            avaliable_buffer_size,
-            packets_receiving_rate,
-            estimated_link_capacity,
-            receiving_rate,
-        })
     }
 }
 
@@ -257,7 +236,7 @@ impl IsPacket for AckAck {
 
 unsafe impl Zeroable for AckAck {}
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct Nak {
     pub header: Header,
     /// A single or a list of lost sequence numbers.
@@ -297,8 +276,8 @@ impl IsPacket for Nak {
         }
     }
 
-    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
-        let lost_packet_sequence_numbers = SequenceNumbers::decode(&packet.body[..])?;
+    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
+        let lost_packet_sequence_numbers = SequenceNumbers::decode(&mut packet.body)?;
 
         Ok(Self {
             header: packet.header,
@@ -397,10 +376,8 @@ impl IsPacket for DropRequest {
             return Err(Error::InvalidControlType(header.control_type().to_u16()));
         }
 
-        let mut cursor = Cursor::new(packet.body);
-
-        let first_packet_sequence_number = u32::decode(&mut cursor)?;
-        let last_packet_sequence_number = u32::decode(cursor)?;
+        let first_packet_sequence_number = u32::decode(&mut packet.body)?;
+        let last_packet_sequence_number = u32::decode(&mut packet.body)?;
 
         Ok(Self {
             header: packet.header,
@@ -496,18 +473,18 @@ impl Encode for SequenceNumbers {
 impl Decode for SequenceNumbers {
     type Error = Error;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let seq = Bits::<U32>::decode(&mut reader)?;
+        let seq = Bits::<U32>::decode(bytes)?;
 
         // Is a range
         if seq.bits(0) == 1 {
             let mut start = seq;
             start.set_bits(0, 0);
 
-            let end = Bits::<U32>::decode(&mut reader)?;
+            let end = Bits::<U32>::decode(bytes)?;
             // TODO: Check that the ending sequence has the MSB bit set to 0.
 
             Ok(Self::Range(start.0 .0..=end.0 .0))
@@ -624,8 +601,8 @@ mod tests {
 
     #[test]
     fn test_sequence_numbers() {
-        let buf = [0x86, 0x2D, 0x67, 0xFA, 0x06, 0x2D, 0x68, 0x13];
-        let seqnum = SequenceNumbers::decode(&buf[..]).unwrap();
+        let mut buf: &[u8] = &[0x86, 0x2D, 0x67, 0xFA, 0x06, 0x2D, 0x68, 0x13];
+        let seqnum = SequenceNumbers::decode(&mut buf).unwrap();
 
         assert_eq!(seqnum, 103639034..=103639059);
     }

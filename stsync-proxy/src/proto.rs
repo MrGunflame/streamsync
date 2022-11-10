@@ -1,15 +1,16 @@
+use std::convert::Infallible;
 use std::io::{self, Read, Write};
 use std::mem::{self, MaybeUninit};
 use std::ops::{Add, BitAnd, BitOr, Deref, DerefMut, Range, Shl, Shr, Sub};
 
-use bytes::BytesMut;
+use bytes::Buf;
 
 pub trait Decode: Sized {
     type Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read;
+        B: Buf;
 }
 
 pub trait Encode {
@@ -55,12 +56,13 @@ macro_rules! impl_uint_be {
             impl Decode for $t {
                 type Error = io::Error;
 
-                fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+                fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
                 where
-                    R: Read
+                    B: Buf,
                 {
                     let mut buf = [0 ;mem::size_of::<Self>()];
-                    reader.read_exact(&mut buf)?;
+                    bytes.chunk().read_exact(&mut buf)?;
+                    bytes.advance(mem::size_of::<Self>());
                     Ok(Self::from_be_bytes(buf))
                 }
             }
@@ -92,14 +94,14 @@ impl Encode for [u8] {
 }
 
 impl Decode for Vec<u8> {
-    type Error = io::Error;
+    type Error = Infallible;
 
-    fn decode<R>(mut reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let mut buf = Vec::with_capacity(256);
-        reader.read_to_end(&mut buf)?;
+        let buf = bytes.chunk().to_vec();
+        bytes.advance(bytes.remaining());
         Ok(buf)
     }
 }
@@ -180,11 +182,11 @@ where
     type Error = T::Error;
 
     #[inline]
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        Ok(Self(T::decode(reader)?))
+        Ok(Self(T::decode(bytes)?))
     }
 }
 
@@ -336,11 +338,11 @@ macro_rules! uint_newtype {
             impl Decode for $id {
                 type Error = <$t as Decode>::Error;
 
-                fn decode<R>(reader: R) -> Result<Self, Self::Error>
+                fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
                 where
-                    R: Read
+                    B: Buf,
                 {
-                    Ok(Self(<$t>::decode(reader)?))
+                    Ok(Self(<$t>::decode(bytes)?))
                 }
             }
 
@@ -360,17 +362,11 @@ uint_newtype! {
 impl Decode for bytes::Bytes {
     type Error = io::Error;
 
-    fn decode<R>(reader: R) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
-        R: Read,
+        B: Buf,
     {
-        let mut buf = Vec::decode(reader)?;
-
-        // TODO: There's no need to do any copying here, we can just leak the Vec
-        // and reference the underlying buffer.
-        let mut bytes = BytesMut::with_capacity(buf.len());
-        bytes.extend_from_slice(&buf);
-        Ok(bytes.freeze())
+        Ok(bytes.copy_to_bytes(bytes.remaining()))
     }
 }
 

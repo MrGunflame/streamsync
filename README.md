@@ -46,6 +46,15 @@ Possible values are `trace`, `debug`, `info`, `warn`, `error` and `off`.
 
 ## Running the server
 
+### Docker
+
+After building the docker image (using the command above) you can run a docker container. **It is recommended to run the container
+in `network=host` mode due to the significant overhead of dockers NAT. Note that this also exposes the HTTP server on 9998 by default.**
+
+```
+docker run -d --name streamsync -e RUST_LOG0=info --network=host stsync-proxy:latest
+```
+
 The default configuration binds the SRT server to `0.0.0.0:9999`. It additionally binds a
 HTTP server to `0.0.0.0:9998`. The HTTP server is currently only requires to read server
 and connection metrics (see below).

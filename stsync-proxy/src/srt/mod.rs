@@ -42,6 +42,8 @@ pub enum Error {
     InvalidControlType(u16),
     #[error("invalid extension type {0}")]
     InvalidExtensionType(u16),
+    #[error("invalid encryption field {0}")]
+    InvalidEncryptionField(u16),
     #[error("{0}")]
     FromUtf8Error(std::str::Utf8Error),
     #[error("unsupported extension {0:?}")]
@@ -359,162 +361,62 @@ impl TryFrom<u16> for ControlPacketType {
 
 pub enum ControlSubType {}
 
-#[derive(Clone, Debug, Default)]
-pub struct HandshakePacket {
-    header: Header,
-    /// A base protocol version number.  Currently used
-    /// values are 4 and 5.  Values greater than 5 are reserved for future
-    /// use.
-    version: u32,
-    /// Block cipher family and key size.  The
-    /// values of this field are described in Table 2.  The default value
-    /// is AES-128.
-    encryption_field: u16,
-    /// This field is message specific extension
-    /// related to Handshake Type field.  The value MUST be set to 0
-    /// except for the following cases.  (1) If the handshake control
-    /// packet is the INDUCTION message, this field is sent back by the
-    /// Listener. (2) In the case of a CONCLUSION message, this field
-    /// value should contain a combination of Extension Type values.  For
-    /// more details, see Section 4.3.1.
-    extension_field: ExtensionField,
-    /// The sequence number of the very first data packet to be sent.
-    initial_packet_sequence_number: u32,
-    /// This value is typically set
-    /// to 1500, which is the default Maximum Transmission Unit (MTU) size
-    /// for Ethernet, but can be less.
-    maximum_transmission_unit_size: u32,
-    /// The value of this field is the
-    /// maximum number of data packets allowed to be "in flight" (i.e. the
-    /// number of sent packets for which an ACK control packet has not yet
-    /// been received).
-    maximum_flow_window_size: u32,
-    /// This field indicates the handshake packet
-    /// type.  The possible values are described in Table 4.  For more
-    /// details refer to Section 4.3.
-    handshake_type: HandshakeType,
-    /// This field holds the ID of the source SRT
-    /// socket from which a handshake packet is issued.
-    srt_socket_id: u32,
-    /// Randomized value for processing a handshake.
-    /// The value of this field is specified by the handshake message
-    /// type.  See Section 4.3.
-    syn_cookie: u32,
-    /// IPv4 or IPv6 address of the packet's
-    /// sender.  The value consists of four 32-bit fields.  In the case of
-    /// IPv4 addresses, fields 2, 3 and 4 are filled with zeroes.
-    peer_ip_address: u128,
-    extensions: Extensions,
+/// The `EncryptionField` defines advertised block cipher family and key size.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct EncryptionField(u16);
+
+impl EncryptionField {
+    /// No encryption
+    const NONE: Self = Self(0);
+    /// AES-128
+    const AES128: Self = Self(1);
+    /// AES-192
+    const AES192: Self = Self(2);
+    /// AES-256
+    const AES256: Self = Self(4);
+
+    pub const fn from_u16(n: u16) -> Option<Self> {
+        match Self(n) {
+            Self::NONE => Some(Self::NONE),
+            Self::AES128 => Some(Self::AES128),
+            Self::AES192 => Some(Self::AES192),
+            Self::AES256 => Some(Self::AES256),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn to_u16(self) -> u16 {
+        self.0
+    }
 }
 
-impl HandshakePacket {
-    fn encode_body<W>(&self, mut writer: W) -> Result<(), Error>
+impl Encode for EncryptionField {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
-        self.version.encode(&mut writer)?;
-        self.encryption_field.encode(&mut writer)?;
-        self.extension_field.encode(&mut writer)?;
-        self.initial_packet_sequence_number.encode(&mut writer)?;
-        self.maximum_transmission_unit_size.encode(&mut writer)?;
-        self.maximum_flow_window_size.encode(&mut writer)?;
-        self.handshake_type.encode(&mut writer)?;
-        self.srt_socket_id.encode(&mut writer)?;
-        self.syn_cookie.encode(&mut writer)?;
-        self.peer_ip_address.encode(&mut writer)?;
-        self.extensions.encode(writer)?;
-
+        self.to_u16().encode(writer)?;
         Ok(())
     }
+}
 
-    fn decode_body<B>(mut bytes: B) -> Result<Self, Error>
+impl Decode for EncryptionField {
+    type Error = Error;
+
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
-        let version = u32::decode(&mut bytes)?;
-        let encryption_field = u16::decode(&mut bytes)?;
-        let extension_field = ExtensionField::decode(&mut bytes)?;
-        let initial_packet_sequence_number = u32::decode(&mut bytes)?;
-        let maximum_transmission_unit_size = u32::decode(&mut bytes)?;
-        let maximum_flow_window_size = u32::decode(&mut bytes)?;
-        let handshake_type = HandshakeType::decode(&mut bytes)?;
-        let srt_socket_id = u32::decode(&mut bytes)?;
-        let syn_cookie = u32::decode(&mut bytes)?;
-        let peer_ip_address = u128::decode(&mut bytes)?;
-        let extensions = Extensions::decode(&mut bytes)?;
+        let n = u16::decode(bytes)?;
 
-        Ok(Self {
-            header: Header::default(),
-            version,
-            encryption_field,
-            extension_field,
-            initial_packet_sequence_number,
-            maximum_transmission_unit_size,
-            maximum_flow_window_size,
-            handshake_type,
-            srt_socket_id,
-            syn_cookie,
-            peer_ip_address,
-            extensions,
-        })
-    }
-}
-
-impl IsPacket for HandshakePacket {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        let mut body = Vec::new();
-        self.encode_body(&mut body).unwrap();
-
-        Packet {
-            header: self.header,
-            body: body.into(),
+        match Self::from_u16(n) {
+            Some(this) => Ok(this),
+            None => Err(Error::InvalidEncryptionField(n)),
         }
     }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let header = packet.header.as_control()?;
-        if header.control_type() != ControlPacketType::Handshake {
-            return Err(Error::InvalidControlType(header.control_type().to_u16()));
-        }
-
-        let mut this = Self::decode_body(&packet.body[..])?;
-        this.header = packet.header;
-
-        Ok(this)
-    }
-}
-
-impl Encode for HandshakePacket {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: Write,
-    {
-        self.header.encode(&mut writer)?;
-        self.version.encode(&mut writer)?;
-        self.encryption_field.encode(&mut writer)?;
-        self.extension_field.encode(&mut writer)?;
-        self.initial_packet_sequence_number.encode(&mut writer)?;
-        self.maximum_transmission_unit_size.encode(&mut writer)?;
-        self.maximum_flow_window_size.encode(&mut writer)?;
-        self.handshake_type.encode(&mut writer)?;
-        self.srt_socket_id.encode(&mut writer)?;
-        self.syn_cookie.encode(&mut writer)?;
-        self.peer_ip_address.encode(&mut writer)?;
-        self.extensions.encode(&mut writer)?;
-
-        Ok(())
-    }
-}
-
-pub enum EncryptionField {
-    None,
-    AES128,
-    AES192,
-    AES256,
 }
 
 // +============+================+

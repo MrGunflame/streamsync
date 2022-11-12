@@ -1,7 +1,8 @@
 pub mod builder;
+pub mod header;
 
 use std::{
-    io::{Cursor, Read, Write},
+    io::Write,
     ops::{Range, RangeInclusive},
 };
 
@@ -10,16 +11,68 @@ use streamsync_macros::Packet;
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
-use self::builder::{
-    AckAckBuilder, AckBuilder, DropRequestBuilder, KeepaliveBuilder, LightAckBuilder, NakBuilder,
-    ShutdownBuilder,
+use self::{
+    builder::{
+        AckAckBuilder, AckBuilder, DropRequestBuilder, KeepaliveBuilder, LightAckBuilder,
+        NakBuilder, ShutdownBuilder,
+    },
+    header::{AckHeader, DropRequestHeader, HandshakeHeader, KeepaliveHeader, ShutdownHeader},
 };
 
-use super::{ControlPacketType, Error, Header, IsPacket, Packet};
+use super::{EncryptionField, Error, ExtensionField, Extensions, HandshakeType, Header};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
+pub struct Handshake {
+    pub header: HandshakeHeader,
+    /// A base protocol version number.  Currently used
+    /// values are 4 and 5.  Values greater than 5 are reserved for future
+    /// use.
+    pub version: u32,
+    /// Block cipher family and key size.  The
+    /// values of this field are described in Table 2.  The default value
+    /// is AES-128.
+    pub encryption_field: EncryptionField,
+    /// This field is message specific extension
+    /// related to Handshake Type field.  The value MUST be set to 0
+    /// except for the following cases.  (1) If the handshake control
+    /// packet is the INDUCTION message, this field is sent back by the
+    /// Listener. (2) In the case of a CONCLUSION message, this field
+    /// value should contain a combination of Extension Type values.  For
+    /// more details, see Section 4.3.1.
+    pub extension_field: ExtensionField,
+    /// The sequence number of the very first data packet to be sent.
+    pub initial_packet_sequence_number: u32,
+    /// This value is typically set
+    /// to 1500, which is the default Maximum Transmission Unit (MTU) size
+    /// for Ethernet, but can be less.
+    pub maximum_transmission_unit_size: u32,
+    /// The value of this field is the
+    /// maximum number of data packets allowed to be "in flight" (i.e. the
+    /// number of sent packets for which an ACK control packet has not yet
+    /// been received).
+    pub maximum_flow_window_size: u32,
+    /// This field indicates the handshake packet
+    /// type.  The possible values are described in Table 4.  For more
+    /// details refer to Section 4.3.
+    pub handshake_type: HandshakeType,
+    /// This field holds the ID of the source SRT
+    /// socket from which a handshake packet is issued.
+    pub srt_socket_id: u32,
+    /// Randomized value for processing a handshake.
+    /// The value of this field is specified by the handshake message
+    /// type.  See Section 4.3.
+    pub syn_cookie: u32,
+    /// IPv4 or IPv6 address of the packet's
+    /// sender.  The value consists of four 32-bit fields.  In the case of
+    /// IPv4 addresses, fields 2, 3 and 4 are filled with zeroes.
+    pub peer_ip_address: u128,
+    pub extensions: Extensions,
+}
+
+/// The `Keep-Alive` packet.
+#[derive(Clone, Debug, Default, Packet)]
 pub struct Keepalive {
-    pub header: Header,
+    pub header: KeepaliveHeader,
     _unused: u32,
 }
 
@@ -29,40 +82,9 @@ impl Keepalive {
     }
 }
 
-impl IsPacket for Keepalive {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        Packet {
-            header: self.header,
-            body: vec![0, 0, 0, 0].into(),
-        }
-    }
-
-    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
-        Ok(Self {
-            header: packet.header,
-            _unused: 0,
-        })
-    }
-}
-
-impl Encode for Keepalive {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: std::io::Write,
-    {
-        self.header.encode(&mut writer)?;
-        self._unused.encode(writer)?;
-        Ok(())
-    }
-}
-
 #[derive(Clone, Debug, Default, Packet)]
 pub struct Ack {
-    pub header: Header,
+    pub header: AckHeader,
     pub last_acknowledged_packet_sequence_number: u32,
     pub rtt: u32,
     pub rtt_variance: u32,
@@ -84,69 +106,14 @@ impl Ack {
     pub fn set_acknowledgement_number(&mut self, n: u32) {
         self.header.seg1 = Bits(U32(n));
     }
-
-    fn encode_body<W>(&self, mut writer: W) -> Result<(), Error>
-    where
-        W: Write,
-    {
-        self.last_acknowledged_packet_sequence_number
-            .encode(&mut writer)?;
-        self.rtt.encode(&mut writer)?;
-        self.rtt_variance.encode(&mut writer)?;
-        self.avaliable_buffer_size.encode(&mut writer)?;
-        self.packets_receiving_rate.encode(&mut writer)?;
-        self.estimated_link_capacity.encode(&mut writer)?;
-        self.receiving_rate.encode(&mut writer)?;
-
-        Ok(())
-    }
-}
-
-impl IsPacket for Ack {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        let mut body = Vec::new();
-        self.encode_body(&mut body).unwrap();
-
-        Packet {
-            header: self.header,
-            body: body.into(),
-        }
-    }
-
-    fn downcast(packet: Packet) -> Result<Self, Self::Error> {
-        Ok(Self::decode_body(&packet.body[..], packet.header)?)
-    }
-}
-
-impl Encode for Ack {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: Write,
-    {
-        self.header.encode(&mut writer)?;
-        self.last_acknowledged_packet_sequence_number
-            .encode(&mut writer)?;
-        self.rtt.encode(&mut writer)?;
-        self.rtt_variance.encode(&mut writer)?;
-        self.avaliable_buffer_size.encode(&mut writer)?;
-        self.packets_receiving_rate.encode(&mut writer)?;
-        self.estimated_link_capacity.encode(&mut writer)?;
-        self.receiving_rate.encode(&mut writer)?;
-
-        Ok(())
-    }
 }
 
 /// A Light ACK control packet includes only the Last Acknowledged
 /// Packet Sequence Number field.  The Type-specific Information field
 /// should be set to 0.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct LightAck {
-    pub header: Header,
+    pub header: AckHeader,
     pub last_acknowledged_packet_sequence_number: u32,
 }
 
@@ -156,30 +123,14 @@ impl LightAck {
     }
 }
 
-impl Encode for LightAck {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: std::io::Write,
-    {
-        self.header.encode(&mut writer)?;
-        self.last_acknowledged_packet_sequence_number
-            .encode(&mut writer)?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct SmallAck {
-    pub header: Header,
+    pub header: AckHeader,
     pub last_acknowledged_packet_sequence_number: u32,
     pub rtt: u32,
     pub rtt_variance: u32,
     pub avaliable_buffer_size: u32,
 }
-
-impl SmallAck {}
 
 ///     0                   1                   2                   3
 /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -192,7 +143,7 @@ impl SmallAck {}
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// |                     Destination Socket ID                     |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Packet)]
 pub struct AckAck {
     pub header: Header,
     _unused: u32,
@@ -208,29 +159,6 @@ impl AckAck {
     /// acknowledged by this ACKACK packet.
     pub fn acknowledgement_number(&self) -> u32 {
         self.header.seg1.0 .0
-    }
-}
-
-impl IsPacket for AckAck {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        Packet {
-            header: self.header,
-            body: vec![0, 0, 0, 0].into(),
-        }
-    }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let header = packet.header.as_control()?;
-        if header.control_type() != ControlPacketType::AckAck {
-            return Err(Error::InvalidControlType(header.control_type().to_u16()));
-        }
-
-        Ok(Self {
-            header: packet.header,
-            _unused: 0,
-        })
     }
 }
 
@@ -264,45 +192,9 @@ impl Nak {
     }
 }
 
-impl IsPacket for Nak {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        let body = self.lost_packet_sequence_numbers.encode_to_vec().unwrap();
-
-        Packet {
-            header: self.header,
-            body: body.into(),
-        }
-    }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let lost_packet_sequence_numbers = SequenceNumbers::decode(&mut packet.body)?;
-
-        Ok(Self {
-            header: packet.header,
-            lost_packet_sequence_numbers,
-        })
-    }
-}
-
-impl Encode for Nak {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: Write,
-    {
-        self.header.encode(&mut writer)?;
-        self.lost_packet_sequence_numbers.encode(&mut writer)?;
-
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct Shutdown {
-    header: Header,
+    header: ShutdownHeader,
     _unused: u32,
 }
 
@@ -312,32 +204,9 @@ impl Shutdown {
     }
 }
 
-impl IsPacket for Shutdown {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        Packet {
-            header: self.header,
-            body: vec![0, 0, 0, 0].into(),
-        }
-    }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let header = packet.header.as_control()?;
-        if header.control_type() != ControlPacketType::Shutdown {
-            return Err(Error::InvalidControlType(header.control_type().to_u16()));
-        }
-
-        Ok(Self {
-            header: packet.header,
-            _unused: 0,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct DropRequest {
-    pub header: Header,
+    pub header: DropRequestHeader,
     pub first_packet_sequence_number: u32,
     pub last_packet_sequence_number: u32,
 }
@@ -353,37 +222,6 @@ impl DropRequest {
 
     pub fn set_message_number(&mut self, n: u32) {
         self.header.seg1 = Bits(U32(n));
-    }
-}
-
-impl IsPacket for DropRequest {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        let mut body = Vec::new();
-        body.extend(self.first_packet_sequence_number.to_be_bytes());
-        body.extend(self.last_packet_sequence_number.to_be_bytes());
-
-        Packet {
-            header: self.header,
-            body: body.into(),
-        }
-    }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let header = packet.header.as_control()?;
-        if header.control_type() != ControlPacketType::DropReq {
-            return Err(Error::InvalidControlType(header.control_type().to_u16()));
-        }
-
-        let first_packet_sequence_number = u32::decode(&mut packet.body)?;
-        let last_packet_sequence_number = u32::decode(&mut packet.body)?;
-
-        Ok(Self {
-            header: packet.header,
-            first_packet_sequence_number,
-            last_packet_sequence_number,
-        })
     }
 }
 

@@ -11,19 +11,17 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures::sink::{Close, Feed};
 use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{event, span, Level, Span};
 
-use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
 use crate::srt::proto::Nak;
-use crate::srt::{HandshakeType, VERSION};
+use crate::srt::{EncryptionField, HandshakeType, VERSION};
 use crate::utils::Shared;
 
 use super::metrics::ConnectionMetrics;
-use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
+use super::proto::{Ack, AckAck, DropRequest, Handshake, Keepalive, Shutdown};
 use super::sink::OutputSink;
 use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
@@ -31,7 +29,7 @@ use super::stream::SrtStream;
 use super::utils::Sequence;
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
-    HandshakePacket, IsPacket, Packet, PacketPosition, PacketType,
+    IsPacket, Packet, PacketPosition, PacketType,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -656,7 +654,7 @@ where
         }
     }
 
-    fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
+    fn handle_handshake(&mut self, mut packet: Handshake) -> Result<()> {
         tracing::trace!("Connection.handle_handshake");
 
         let syn_cookie = match self.mode {
@@ -679,10 +677,11 @@ where
             return Ok(());
         }
 
-        if packet.encryption_field != 0 {
+        if packet.encryption_field != EncryptionField::NONE {
             tracing::debug!(
-                "Missmatched encryption_field {} in HS (expected 0), rejecting",
-                packet.encryption_field
+                "Missmatched encryption_field {:?} in HS (expected {:?}), rejecting",
+                packet.encryption_field,
+                EncryptionField::NONE,
             );
             return Ok(());
         }
@@ -814,10 +813,10 @@ where
     fn reject(&mut self, reason: HandshakeType) -> Result<()> {
         event!(parent: &self.resource_span, Level::DEBUG, "Rejecting client {} with reason {:?}", self.id, reason);
 
-        let mut packet = HandshakePacket::default();
+        let mut packet = Handshake::default();
         packet.header.set_packet_type(PacketType::Control);
         packet.version = VERSION;
-        packet.encryption_field = 0;
+        packet.encryption_field = EncryptionField::NONE;
         packet.extension_field = ExtensionField::NONE;
         packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
         packet.maximum_transmission_unit_size = self.mtu as u32;

@@ -32,16 +32,23 @@ impl Error {
     }
 }
 
+/// A producer and consumer for transport streams.
+///
+/// A `SessionManager` is the interface that transport streams will use to request and publish
+/// streams. A `SessionManager` is designed to be shareable between different stream
+/// implementations.
 pub trait SessionManager: Send + Sync + 'static {
     type Sink: Sink<Bytes> + Send + Sync + Unpin + 'static;
     type Stream: Stream<Item = Bytes> + Send + Sync + Unpin + 'static;
 
+    /// Requests a new [`LiveSink`] to the stream with the given `resource_id`.
     fn publish(
         &self,
         resource_id: Option<ResourceId>,
         session_id: Option<SessionId>,
     ) -> Result<LiveSink<Self::Sink>, Error>;
 
+    /// Requests a new [`LiveStream`] of the stream with the given `resource_id`.
     fn request(
         &self,
         resource_id: Option<ResourceId>,

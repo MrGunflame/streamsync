@@ -1,53 +1,35 @@
-use crate::{
-    proto::{Bits, Zeroable, U32},
-    srt::{ControlPacketType, PacketType},
-};
+use crate::proto::{Bits, U32};
 
 use super::{
     Ack, AckAck, DropRequest, Keepalive, LightAck, Nak, SequenceNumbers, Shutdown, SmallAck,
 };
 
-#[derive(Clone, Debug)]
+/// A builder for a [`Keepalive`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct KeepaliveBuilder(Keepalive);
 
 impl KeepaliveBuilder {
+    /// Creates a new `KeepaliveBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = Keepalive::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Keepalive);
-
-        Self(packet)
+        Self(Keepalive::default())
     }
 
-    pub fn build(self) -> Keepalive {
+    /// Consumes this `KeepaliveBuilder`, returning the constructed [`Keepalive`] packet.
+    #[inline]
+    pub const fn build(self) -> Keepalive {
         self.0
     }
 }
 
-impl Default for KeepaliveBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Debug)]
+/// A builder for a [`Ack`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct AckBuilder(Ack);
 
 impl AckBuilder {
+    /// Creates a new `AckBuilder`.
     pub fn new() -> Self {
-        let mut packet = Ack::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Ack);
-
-        Self(packet)
+        Self(Ack::default())
     }
 
     pub fn acknowledgement_number(mut self, n: u32) -> Self {
@@ -90,33 +72,22 @@ impl AckBuilder {
         self
     }
 
-    pub fn build(self) -> Ack {
+    /// Consumes this `AckBuilder`, returning the constructed [`Ack`] packet.
+    #[inline]
+    pub const fn build(self) -> Ack {
         self.0
     }
 }
 
-impl Default for AckBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A builder for a [`LightAck`] packet.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LightAckBuilder(LightAck);
 
 impl LightAckBuilder {
+    /// Creates a new `LightAckBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        // Set correct header (Control + Ack).
-        let mut packet = LightAck::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Ack);
-
-        Self(packet)
+        Self(LightAck::default())
     }
 
     pub const fn last_acknowledged_packet_sequence_number(mut self, n: u32) -> Self {
@@ -124,31 +95,22 @@ impl LightAckBuilder {
         self
     }
 
-    pub fn build(self) -> LightAck {
+    /// Consumes this `LightAckBuilder`, returning the constructed [`LightAck`] packet.
+    #[inline]
+    pub const fn build(self) -> LightAck {
         self.0
     }
 }
 
-impl Default for LightAckBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Debug)]
+/// A builder for a [`SmallAck`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct SmallAckBuilder(SmallAck);
 
 impl SmallAckBuilder {
+    /// Creates a new `SmallAckBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = SmallAck::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Ack);
-
-        Self(packet)
+        Self(SmallAck::default())
     }
 
     pub const fn last_acknowledged_packet_sequence_number(mut self, n: u32) -> Self {
@@ -166,51 +128,45 @@ impl SmallAckBuilder {
         self
     }
 
+    /// Consumes this `SmallAckBuilder`, returning the constructed [`SmallAck`] packet.
+    #[inline]
     pub const fn build(self) -> SmallAck {
         self.0
     }
 }
 
-#[derive(Clone, Debug)]
+/// A builder for a [`AckAck`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct AckAckBuilder(AckAck);
 
 impl AckAckBuilder {
+    /// Creates a new `AckAckBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = AckAck::zeroed();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::AckAck);
-
-        Self(packet)
+        Self(AckAck::default())
     }
 
-    pub const fn acknowledgement_number(mut self, n: u32) -> Self {
-        self.0.header.seg1 = Bits(U32(n));
+    pub fn acknowledgement_number(mut self, n: u32) -> Self {
+        self.0.set_acknowledgement_number(n);
         self
     }
 
+    /// Consumes this `AckAckBuilder`, returning the constructed [`AckAck`] packet.
+    #[inline]
     pub const fn build(self) -> AckAck {
         self.0
     }
 }
 
-#[derive(Clone, Debug)]
+/// A builder for a [`Nak`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct NakBuilder(Nak);
 
 impl NakBuilder {
+    /// Creates a new `NakBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = Nak::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Nak);
-
-        Self(packet)
+        Self(Nak::default())
     }
 
     pub fn lost_packet_sequence_number(mut self, n: u32) -> Self {
@@ -218,6 +174,7 @@ impl NakBuilder {
         self
     }
 
+    #[inline]
     pub fn lost_packet_sequence_numbers<T>(mut self, seq: T) -> Self
     where
         T: Into<SequenceNumbers>,
@@ -226,52 +183,40 @@ impl NakBuilder {
         self
     }
 
-    pub fn build(self) -> Nak {
+    /// Consumes this `NakBuilder`, returning the constructed [`Nak`] packet.
+    #[inline]
+    pub const fn build(self) -> Nak {
         self.0
     }
 }
 
-#[derive(Clone, Debug)]
+/// A builder for a [`Shutdown`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct ShutdownBuilder(Shutdown);
 
 impl ShutdownBuilder {
+    /// Creates a new `ShutdownBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = Shutdown::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::Shutdown);
-
-        Self(packet)
+        Self(Shutdown::default())
     }
 
+    /// Consumes this `ShutdownBuilder`, returning the constructed [`Shutdown`] packet.
+    #[inline]
     pub const fn build(self) -> Shutdown {
         self.0
     }
 }
 
-impl Default for ShutdownBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Debug)]
+/// A builder for a [`DropRequest`] packet.
+#[derive(Clone, Debug, Default)]
 pub struct DropRequestBuilder(DropRequest);
 
 impl DropRequestBuilder {
+    /// Creates a new `DropRequestBuilder`.
+    #[inline]
     pub fn new() -> Self {
-        let mut packet = DropRequest::default();
-        packet.header.set_packet_type(PacketType::Control);
-        packet
-            .header
-            .as_control()
-            .unwrap()
-            .set_control_type(ControlPacketType::DropReq);
-
-        Self(packet)
+        Self(DropRequest::default())
     }
 
     pub fn message_number(mut self, n: u32) -> Self {
@@ -289,6 +234,8 @@ impl DropRequestBuilder {
         self
     }
 
+    /// Consumes this `DropRequestBuilder`, returning the constructed [`DropRequest`] packet.
+    #[inline]
     pub const fn build(self) -> DropRequest {
         self.0
     }

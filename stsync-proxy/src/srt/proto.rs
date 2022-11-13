@@ -16,7 +16,10 @@ use self::{
         AckAckBuilder, AckBuilder, DropRequestBuilder, KeepaliveBuilder, LightAckBuilder,
         NakBuilder, ShutdownBuilder,
     },
-    header::{AckHeader, DropRequestHeader, HandshakeHeader, KeepaliveHeader, ShutdownHeader},
+    header::{
+        AckAckHeader, AckHeader, DropRequestHeader, HandshakeHeader, KeepaliveHeader, NakHeader,
+        ShutdownHeader,
+    },
 };
 
 use super::{EncryptionField, Error, ExtensionField, Extensions, HandshakeType, Header};
@@ -143,13 +146,15 @@ pub struct SmallAck {
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 /// |                     Destination Socket ID                     |
 /// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-#[derive(Clone, Debug, Packet)]
+#[derive(Clone, Debug, Default, Packet)]
 pub struct AckAck {
-    pub header: Header,
+    pub header: AckAckHeader,
     _unused: u32,
 }
 
 impl AckAck {
+    /// Creates a new `AckAckBuilder`.
+    #[inline]
     pub fn builder() -> AckAckBuilder {
         AckAckBuilder::new()
     }
@@ -157,8 +162,14 @@ impl AckAck {
     /// This field contains the Acknowledgement
     /// Number of the full ACK packet the reception of which is being
     /// acknowledged by this ACKACK packet.
+    #[inline]
     pub fn acknowledgement_number(&self) -> u32 {
         self.header.seg1.0 .0
+    }
+
+    #[inline]
+    pub fn set_acknowledgement_number(&mut self, val: u32) {
+        self.header.seg1.0 .0 = val;
     }
 }
 
@@ -166,7 +177,7 @@ unsafe impl Zeroable for AckAck {}
 
 #[derive(Clone, Debug, Default, Packet)]
 pub struct Nak {
-    pub header: Header,
+    pub header: NakHeader,
     /// A single or a list of lost sequence numbers.
     pub lost_packet_sequence_numbers: SequenceNumbers,
 }
@@ -194,11 +205,13 @@ impl Nak {
 
 #[derive(Clone, Debug, Default, Packet)]
 pub struct Shutdown {
-    header: ShutdownHeader,
+    pub header: ShutdownHeader,
     _unused: u32,
 }
 
 impl Shutdown {
+    /// Creates a new [`ShutdownBuilder`].
+    #[inline]
     pub fn builder() -> ShutdownBuilder {
         ShutdownBuilder::new()
     }

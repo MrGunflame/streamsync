@@ -44,6 +44,19 @@ docker build --rm -t stsync-proxy -f stsync-proxy/Dockerfile .
 The only option currently supported is `RUST_LOG` which defines the loglevel of the server.
 Possible values are `trace`, `debug`, `info`, `warn`, `error` and `off`.
 
+## System Resources
+
+The server does not impose any direct requirements, but the number of runnable streams
+heavily depends on the avaliable resources. The most important requirement is raw UDP
+throughput; the most important resources are network bandwidth and CPU performance. Server
+performance scales almost linearly with thread count.
+
+As system exhaustion increases you will see increasing packet loss and with that loss of
+video data.
+
+With the default MTU of 1500 and default buffer size of 8192, the memory usage for a single
+stream will be roughly 12MB.
+
 ## Running the server
 
 ### Docker

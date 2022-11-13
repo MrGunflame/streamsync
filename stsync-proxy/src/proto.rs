@@ -56,7 +56,7 @@ macro_rules! impl_uint_be {
             impl Decode for $t {
                 type Error = io::Error;
 
-                fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
+                fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
                 where
                     B: Buf,
                 {

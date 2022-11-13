@@ -38,7 +38,7 @@ where
         if seq < self.initial_sequence_number {
             None
         } else {
-            let index = (seq - self.initial_sequence_number).to_u32();
+            let index = (seq - self.initial_sequence_number).get();
             self.buffer.get(index as usize)
         }
     }

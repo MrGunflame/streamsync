@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::ops::{Add, AddAssign, Deref, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 /// The maximum range that should be checked for wrapping.
 const WRAP_THRESHOLD: u32 = 1024;
@@ -16,8 +16,16 @@ impl Sequence {
         Self(seq)
     }
 
-    pub const fn to_u32(self) -> u32 {
+    /// Returns the current value of the `Sequence`.
+    #[inline]
+    pub const fn get(self) -> u32 {
         self.0
+    }
+
+    /// Sets the current value of the `Sequence`.
+    #[inline]
+    pub fn set(&mut self, val: u32) {
+        self.0 = val;
     }
 }
 
@@ -97,6 +105,7 @@ impl From<u32> for Sequence {
 }
 
 impl Display for Sequence {
+    #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }

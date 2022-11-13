@@ -169,7 +169,7 @@ impl DataPacket {
         match self.header.seg1.bits(0..2).0 {
             0b10 => PacketPosition::First,
             0b00 => PacketPosition::Middle,
-            0b11 => PacketPosition::Full,
+            0b11 => PacketPosition::Solo,
             _ => unreachable!(),
         }
     }
@@ -677,7 +677,7 @@ impl<'a> DataHeader<'a> {
             0b10 => PacketPosition::First,
             0b00 => PacketPosition::Middle,
             0b01 => PacketPosition::Last,
-            0b11 => PacketPosition::Full,
+            0b11 => PacketPosition::Solo,
             _ => unreachable!(),
         }
     }
@@ -687,7 +687,7 @@ impl<'a> DataHeader<'a> {
             PacketPosition::First => 0b10,
             PacketPosition::Middle => 0b00,
             PacketPosition::Last => 0b01,
-            PacketPosition::Full => 0b11,
+            PacketPosition::Solo => 0b11,
         };
 
         self.header.seg1.set_bits(0..2, val);
@@ -735,7 +735,7 @@ pub enum PacketPosition {
     /// The packet is the last packet of the data stream.
     Last,
     /// The packet contains a full data stream.
-    Full,
+    Solo,
 }
 
 #[derive(Clone, Debug, Default)]

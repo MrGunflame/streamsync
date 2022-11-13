@@ -226,10 +226,10 @@ where
                         packet.header.set_packet_type(PacketType::Data);
                         packet
                             .header()
-                            .set_packet_sequence_number(this.server_sequence_number.to_u32());
+                            .set_packet_sequence_number(this.server_sequence_number.get());
                         packet.header().set_message_number(*message_number);
                         packet.header().set_ordered(true);
-                        packet.header().set_packet_position(PacketPosition::Full);
+                        packet.header().set_packet_position(PacketPosition::Solo);
                         packet.data = buf.into();
 
                         this.server_sequence_number += 1;
@@ -455,8 +455,8 @@ where
             }
 
             let packet = Ack::builder()
-                .acknowledgement_number(self.server_sequence_number.to_u32())
-                .last_acknowledged_packet_sequence_number(self.client_sequence_number.to_u32())
+                .acknowledgement_number(self.server_sequence_number.get())
+                .last_acknowledged_packet_sequence_number(self.client_sequence_number.get())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
                 .avaliable_buffer_size(8192)
@@ -488,10 +488,10 @@ where
         packet.header.set_packet_type(PacketType::Data);
         packet
             .header()
-            .set_packet_sequence_number(self.server_sequence_number.to_u32());
+            .set_packet_sequence_number(self.server_sequence_number.get());
         packet.header().set_message_number(*message_number);
         packet.header().set_ordered(true);
-        packet.header().set_packet_position(PacketPosition::Full);
+        packet.header().set_packet_position(PacketPosition::Solo);
         packet.data = bytes.into();
 
         self.server_sequence_number += 1;
@@ -576,7 +576,7 @@ where
             );
 
             self.loss_list
-                .extend(self.client_sequence_number.to_u32()..seqnum.to_u32());
+                .extend(self.client_sequence_number.get()..seqnum.get());
 
             // We attempt to recover the lost packet only if we can expect it to arrive
             // before we would have already consumed it. If we cannot receive the lost
@@ -585,9 +585,8 @@ where
                 // We attempt to recover the lost packet by sending NAK right away. We don't
                 // actually validate that it reaches its destination. If it gets lost we simply
                 // skip the packet.
-                let builder = Nak::builder().lost_packet_sequence_numbers(
-                    self.client_sequence_number.to_u32()..seqnum.to_u32(),
-                );
+                let builder = Nak::builder()
+                    .lost_packet_sequence_numbers(self.client_sequence_number.get()..seqnum.get());
 
                 self.send_prio(builder.build())?;
             }
@@ -698,7 +697,7 @@ where
 
         packet.syn_cookie = 0;
         packet.srt_socket_id = self.id.server_socket_id.0;
-        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
+        packet.initial_packet_sequence_number = self.server_sequence_number.get();
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
@@ -818,7 +817,7 @@ where
         packet.version = VERSION;
         packet.encryption_field = EncryptionField::NONE;
         packet.extension_field = ExtensionField::NONE;
-        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
+        packet.initial_packet_sequence_number = self.server_sequence_number.get();
         packet.maximum_transmission_unit_size = self.mtu as u32;
         packet.maximum_flow_window_size = 8192;
         packet.handshake_type = reason;
@@ -849,7 +848,7 @@ where
                     packet.header().set_packet_sequence_number(seq);
                     packet.header().set_ordered(true);
                     packet.header().set_retransmitted(true);
-                    packet.header().set_packet_position(PacketPosition::Full);
+                    packet.header().set_packet_position(PacketPosition::Solo);
                     packet.data = buf;
 
                     let mut packet = packet.upcast();

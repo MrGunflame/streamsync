@@ -1,17 +1,18 @@
 use std::fmt::Write;
+use std::time::{Duration, Instant};
 
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::{server::conn::Http, Response};
+use hyper::{Body, Method, Request};
+use rand::rngs::OsRng;
+use rand::Rng;
 use tokio::net::TcpListener;
 
-use crate::session::SessionManager;
+use crate::session::buffer::{BufferSessionManager, SessionKey};
+use crate::session::{ResourceId, SessionId, SessionManager};
 use crate::srt::state::State;
 
-pub async fn serve<S>(state: State<S>)
-where
-    S: SessionManager,
-{
+pub async fn serve(state: State<BufferSessionManager>) {
     let socket = TcpListener::bind("0.0.0.0:9998").await.unwrap();
 
     loop {
@@ -22,8 +23,11 @@ where
             let service = service_fn(move |req| {
                 let state = state.clone();
                 async move {
-                    let resp = match req.uri().path() {
-                        "/v1/metrics" => metrics(&state).await,
+                    let resp = match (req.uri().path(), req.method()) {
+                        ("/v1/metrics", &Method::GET) => metrics(&state).await,
+                        (path, method) if path.starts_with("/v1/streams") => {
+                            streams(req, &state).await
+                        }
                         _ => Response::builder()
                             .status(404)
                             .body(Body::from("Not Found"))
@@ -171,5 +175,72 @@ async fn metrics<S: SessionManager>(state: &State<S>) -> Response<Body> {
     Response::builder()
         .status(200)
         .body(Body::from(string))
+        .unwrap()
+}
+
+async fn streams(req: Request<Body>, state: &State<BufferSessionManager>) -> Response<Body> {
+    let path = req.uri().path();
+    let path = path.strip_prefix("/v1/streams").unwrap();
+
+    let mut parts = path.split('/');
+    parts.next().unwrap();
+
+    let id: u64 = match parts.next() {
+        Some(id) => match id.parse() {
+            Ok(id) => id,
+            Err(_) => {
+                return Response::builder()
+                    .status(400)
+                    .body(Body::from("Bad Request"))
+                    .unwrap()
+            }
+        },
+        None => {
+            return Response::builder()
+                .status(405)
+                .body(Body::from("Method not allowed"))
+                .unwrap()
+        }
+    };
+
+    match parts.next() {
+        Some("sessions") => (),
+        _ => {
+            return Response::builder()
+                .status(404)
+                .body(Body::from("Not Found"))
+                .unwrap()
+        }
+    }
+
+    if req.method() != Method::POST {
+        return Response::builder()
+            .status(405)
+            .body(Body::from("Method not allowed"))
+            .unwrap();
+    }
+
+    let expires = Instant::now() + Duration::from_secs(60 * 60 * 24);
+    let resource_id = ResourceId(id);
+    let session_id = SessionId(OsRng.gen());
+
+    let key = SessionKey {
+        expires,
+        resource_id,
+        session_id,
+    };
+
+    state.session_manager.registry.insert(key);
+
+    let body = format!(
+        "{{\"resource_id\":\"{}\",\"session_id\":\"{}\"}}",
+        resource_id, session_id
+    );
+
+    Response::builder()
+        .status(200)
+        .header("Content-Type", "application/json")
+        .header("Access-Control-Allow-Origin", "*")
+        .body(Body::from(body))
         .unwrap()
 }

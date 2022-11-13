@@ -1,29 +1,48 @@
-use std::collections::HashMap;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Instant;
 
 use bytes::Bytes;
 use futures::{Sink, Stream, StreamExt};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use snowflaked::sync::Generator;
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 
 use super::{Error, LiveSink, LiveStream, ResourceId, SessionId, SessionManager};
 
+#[derive(Clone, Debug)]
+pub struct BufferSessionManager(Arc<Inner>);
+
+impl Deref for BufferSessionManager {
+    type Target = Inner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Debug)]
-pub struct BufferSessionManager {
-    resource_id: Arc<Generator>,
-    streams: Arc<Mutex<HashMap<ResourceId, broadcast::Sender<Bytes>>>>,
+pub struct Inner {
+    resource_id: Generator,
+    streams: Mutex<HashMap<ResourceId, broadcast::Sender<Bytes>>>,
+    pub registry: SessionRegistry,
 }
 
 impl BufferSessionManager {
     pub fn new() -> Self {
-        Self {
-            resource_id: Arc::new(Generator::new(0)),
-            streams: Arc::default(),
-        }
+        Self(Arc::new(Inner {
+            resource_id: Generator::new(0),
+            streams: Default::default(),
+            registry: SessionRegistry::new(),
+        }))
     }
 }
 
@@ -36,14 +55,18 @@ impl SessionManager for BufferSessionManager {
         resource_id: Option<ResourceId>,
         session_id: Option<SessionId>,
     ) -> Result<LiveStream<Self::Stream>, Error> {
-        if session_id.is_none() {
-            return Err(Error::InvalidCredentials);
-        }
+        let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
+        let session_id = session_id.ok_or(Error::InvalidCredentials)?;
 
-        let resource_id = match resource_id {
-            Some(id) => id,
-            None => return Err(Error::InvalidResourceId),
-        };
+        match self.registry.get(resource_id) {
+            Some(key) => {
+                if key.session_id != session_id || key.is_expired() {
+                    tracing::debug!("Rejecting due to invalid or expired key");
+                    return Err(Error::InvalidCredentials);
+                }
+            }
+            None => return Err(Error::InvalidCredentials),
+        }
 
         let mut streams = self.streams.lock().unwrap();
 
@@ -69,28 +92,32 @@ impl SessionManager for BufferSessionManager {
         resource_id: Option<ResourceId>,
         session_id: Option<SessionId>,
     ) -> Result<LiveSink<Self::Sink>, Error> {
-        if session_id.is_none() {
-            return Err(Error::InvalidCredentials);
+        let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
+        let session_id = session_id.ok_or(Error::InvalidCredentials)?;
+
+        match self.registry.get(resource_id) {
+            Some(key) => {
+                if key.session_id != session_id || key.is_expired() {
+                    tracing::debug!("Rejecting due to invalid or expired key");
+                    return Err(Error::InvalidCredentials);
+                }
+            }
+            None => return Err(Error::InvalidCredentials),
         }
 
         let mut streams = self.streams.lock().unwrap();
 
-        let id = match resource_id {
-            Some(id) => id,
-            None => self.resource_id.generate(),
-        };
-
-        let tx = match streams.get(&id) {
+        let tx = match streams.get(&resource_id) {
             // Attach to existing stream.
             Some(tx) => tx.clone(),
             None => {
                 let (tx, _) = broadcast::channel(1024);
-                streams.insert(id, tx.clone());
+                streams.insert(resource_id, tx.clone());
                 tx
             }
         };
 
-        Ok(LiveSink::new(id, BufferSink { tx }))
+        Ok(LiveSink::new(resource_id, BufferSink { tx }))
     }
 }
 
@@ -137,3 +164,72 @@ impl Stream for BufferStream {
         }
     }
 }
+
+#[derive(Debug, Default)]
+pub struct SessionRegistry {
+    /// ResourceId => SessionId, Expires
+    inner: RwLock<HashSet<SessionKey>>,
+}
+
+impl SessionRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&self, key: SessionKey) {
+        let mut inner = self.inner.write();
+        inner.insert(key);
+    }
+
+    pub fn get(&self, resource_id: ResourceId) -> Option<SessionKey> {
+        let inner = self.inner.read();
+        inner.get(&resource_id).copied()
+    }
+
+    pub fn take(&self, resource_id: ResourceId) -> Option<SessionKey> {
+        let mut inner = self.inner.write();
+
+        let res = inner.get(&resource_id).copied()?;
+        inner.remove(&resource_id);
+        Some(res)
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SessionKey {
+    pub resource_id: ResourceId,
+    pub session_id: SessionId,
+    pub expires: Instant,
+}
+
+impl SessionKey {
+    pub fn is_expired(&self) -> bool {
+        Instant::now() > self.expires
+    }
+}
+
+impl Hash for SessionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.resource_id.hash(state);
+    }
+}
+
+impl PartialEq for SessionKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.resource_id == other.resource_id
+    }
+}
+
+impl PartialEq<ResourceId> for SessionKey {
+    fn eq(&self, other: &ResourceId) -> bool {
+        self.resource_id == *other
+    }
+}
+
+impl Borrow<ResourceId> for SessionKey {
+    fn borrow(&self) -> &ResourceId {
+        &self.resource_id
+    }
+}
+
+impl Eq for SessionKey {}

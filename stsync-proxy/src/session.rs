@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{Sink, Stream};
+use serde::{Deserialize, Serialize};
 use snowflaked::Snowflake;
 use thiserror::Error;
 
@@ -60,7 +61,7 @@ pub trait SessionManager: Send + Sync + 'static {
 ///
 /// A `ResourceId` is an arbitrary 64-bit number. When used in a string form it is lower hex
 /// encoded. It implements [`Display`] and [`FromStr`] accordingly.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct ResourceId(pub u64);
 
@@ -96,7 +97,7 @@ impl Snowflake for ResourceId {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub u64);
 
 impl Display for SessionId {

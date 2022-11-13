@@ -58,7 +58,7 @@ impl SessionManager for BufferSessionManager {
         let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
         let session_id = session_id.ok_or(Error::InvalidCredentials)?;
 
-        match self.registry.get(resource_id) {
+        match self.registry.get(resource_id, session_id) {
             Some(key) => {
                 if key.session_id != session_id || key.is_expired() {
                     tracing::debug!("Rejecting due to invalid or expired key");
@@ -95,7 +95,7 @@ impl SessionManager for BufferSessionManager {
         let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
         let session_id = session_id.ok_or(Error::InvalidCredentials)?;
 
-        match self.registry.get(resource_id) {
+        match self.registry.get(resource_id, session_id) {
             Some(key) => {
                 if key.session_id != session_id || key.is_expired() {
                     tracing::debug!("Rejecting due to invalid or expired key");
@@ -168,7 +168,7 @@ impl Stream for BufferStream {
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
     /// ResourceId => SessionId, Expires
-    inner: RwLock<HashSet<SessionKey>>,
+    inner: RwLock<HashMap<ResourceId, Vec<SessionKey>>>,
 }
 
 impl SessionRegistry {
@@ -178,20 +178,23 @@ impl SessionRegistry {
 
     pub fn insert(&self, key: SessionKey) {
         let mut inner = self.inner.write();
-        inner.insert(key);
+        match inner.get_mut(&key.resource_id) {
+            Some(vec) => vec.push(key),
+            None => {
+                inner.insert(key.resource_id, vec![key]);
+            }
+        }
     }
 
-    pub fn get(&self, resource_id: ResourceId) -> Option<SessionKey> {
+    pub fn get(&self, resource_id: ResourceId, session_id: SessionId) -> Option<SessionKey> {
         let inner = self.inner.read();
-        inner.get(&resource_id).copied()
-    }
+        for key in inner.get(&resource_id)? {
+            if key.session_id == session_id {
+                return Some(*key);
+            }
+        }
 
-    pub fn take(&self, resource_id: ResourceId) -> Option<SessionKey> {
-        let mut inner = self.inner.write();
-
-        let res = inner.get(&resource_id).copied()?;
-        inner.remove(&resource_id);
-        Some(res)
+        None
     }
 }
 

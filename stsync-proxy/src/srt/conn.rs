@@ -701,6 +701,11 @@ where
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
+            // The CRYPT and REXMITFLG flags must always be set.
+            if !ext.srt_flags.has_crypt() || !ext.srt_flags.has_rexmitflg() {
+                return self.reject(HandshakeType::REJ_ROGUE);
+            }
+
             ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
 
             self.latency = ext.sender_tsbpd_delay;

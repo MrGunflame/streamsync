@@ -1118,6 +1118,18 @@ impl HandshakeExtensionFlags {
     pub const fn from_u32(n: u32) -> Option<Self> {
         Some(Self(n))
     }
+
+    /// Returns `true` if the `CRYPT` flag is set.
+    #[inline]
+    pub const fn has_crypt(self) -> bool {
+        self.0 & Self::CRYPT.0 != 0
+    }
+
+    /// Returns `true` if the `REXMITFLG` flag is set.
+    #[inline]
+    pub const fn has_rexmitflg(self) -> bool {
+        self.0 & Self::REXMITFLG.0 != 0
+    }
 }
 
 impl BitAnd for HandshakeExtensionFlags {

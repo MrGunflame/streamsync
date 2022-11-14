@@ -233,7 +233,7 @@ where
                         packet.data = buf.into();
 
                         this.server_sequence_number += 1;
-                        *message_number += 1;
+                        *message_number = message_number.wrapping_add(1);
 
                         let mut packet = packet.upcast();
                         packet.header.timestamp = timestamp;

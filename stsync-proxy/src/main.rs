@@ -3,8 +3,10 @@
 use clap::Parser;
 use session::{buffer::BufferSessionManager, file::FileSessionManager};
 use srt::{config::Config, server::Server};
+use state::State;
 use tokio::runtime::Builder;
 
+mod database;
 mod http;
 mod metrics;
 mod proto;
@@ -32,7 +34,7 @@ async fn async_main() {
 
     let server = Server::new(manager, Config::default()).unwrap();
 
-    let state = server.state.clone();
+    let state = State::new(server.state.clone());
     tokio::task::spawn(async move {
         http::serve(state).await;
     });

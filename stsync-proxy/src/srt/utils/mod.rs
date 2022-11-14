@@ -6,7 +6,7 @@ use std::ops::{Add, AddAssign, Sub, SubAssign};
 const WRAP_THRESHOLD: u32 = 1024;
 
 /// A `u32` wrapping sequence number.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Sequence(u32);
 
 impl Sequence {
@@ -80,6 +80,21 @@ impl PartialOrd for Sequence {
         }
 
         lhs.partial_cmp(&rhs)
+    }
+}
+
+impl Ord for Sequence {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let mut lhs = self.0;
+        let mut rhs = other.0;
+
+        // If either number has wrapped around, we attempt to wrap around both numbers.
+        if lhs.checked_add(WRAP_THRESHOLD).is_some() || rhs.checked_add(WRAP_THRESHOLD).is_some() {
+            lhs = lhs.wrapping_add(WRAP_THRESHOLD);
+            rhs = rhs.wrapping_add(WRAP_THRESHOLD);
+        }
+
+        lhs.cmp(&rhs)
     }
 }
 

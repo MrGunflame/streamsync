@@ -1486,12 +1486,14 @@ mod tests {
 
     #[test]
     fn test_streamid_extension() {
-        let mut buf: &[u8] = &[
+        let buf = [
             0x3a, 0x3a, 0x21, 0x23, 0x65, 0x72, 0x3d, 0x6d, 0x73, 0x65, 0x75, 0x71, 0x3d, 0x72,
             0x2c, 0x74, 0x35, 0x33, 0x32, 0x31,
         ];
 
-        let ext = StreamIdExtension::decode(&mut buf).unwrap();
+        let mut slice = buf.as_slice();
+
+        let ext = StreamIdExtension::decode(&mut slice).unwrap();
         assert_eq!(ext.content, "#!::m=request,r=1235");
 
         assert_eq!(ext.encode_to_vec().unwrap(), buf);

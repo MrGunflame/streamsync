@@ -121,8 +121,8 @@ mod tests {
         seq += 1;
         assert_eq!(seq.0, 1);
 
-        seq += u32::MAX - 1;
-        assert_eq!(seq.0, u32::MAX);
+        seq += (1 << 31) - 2;
+        assert_eq!(seq.0, (1 << 31) - 1);
 
         seq += 255;
         assert_eq!(seq.0, 254);

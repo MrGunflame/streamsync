@@ -26,7 +26,7 @@ use super::sink::OutputSink;
 use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
 use super::stream::SrtStream;
-use super::utils::Sequence;
+use super::utils::{MessageNumber, Sequence};
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
     IsPacket, Packet, PacketPosition, PacketType,
@@ -227,13 +227,13 @@ where
                         packet
                             .header()
                             .set_packet_sequence_number(this.server_sequence_number.get());
-                        packet.header().set_message_number(*message_number);
+                        packet.header().set_message_number(message_number.get());
                         packet.header().set_ordered(true);
                         packet.header().set_packet_position(PacketPosition::Solo);
                         packet.data = buf.into();
 
                         this.server_sequence_number += 1;
-                        *message_number = message_number.wrapping_add(1);
+                        *message_number += 1;
 
                         let mut packet = packet.upcast();
                         packet.header.timestamp = timestamp;
@@ -489,7 +489,7 @@ where
         packet
             .header()
             .set_packet_sequence_number(self.server_sequence_number.get());
-        packet.header().set_message_number(*message_number);
+        packet.header().set_message_number(message_number.get());
         packet.header().set_ordered(true);
         packet.header().set_packet_position(PacketPosition::Solo);
         packet.data = bytes.into();
@@ -770,7 +770,7 @@ where
 
                     self.mode = ConnectionMode::Request {
                         stream,
-                        message_number: 1,
+                        message_number: MessageNumber::new(1),
                     };
                 }
                 Some("publish") => {
@@ -1173,7 +1173,7 @@ where
     Publish(OutputSink<S>),
     Request {
         stream: SrtStream<LiveStream<S::Stream>>,
-        message_number: u32,
+        message_number: MessageNumber,
     },
 }
 

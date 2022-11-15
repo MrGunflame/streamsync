@@ -1,4 +1,6 @@
-use crate::proto::{Bits, U32};
+use bytes::Bytes;
+
+use crate::srt::{DataPacket, PacketPosition};
 
 use super::{
     Ack, AckAck, DropRequest, Keepalive, LightAck, Nak, SequenceNumbers, Shutdown, SmallAck,
@@ -237,6 +239,81 @@ impl DropRequestBuilder {
     /// Consumes this `DropRequestBuilder`, returning the constructed [`DropRequest`] packet.
     #[inline]
     pub const fn build(self) -> DropRequest {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct DataPacketBuilder(DataPacket);
+
+impl DataPacketBuilder {
+    #[inline]
+    pub fn new() -> Self {
+        Self(DataPacket::default())
+    }
+
+    /// Sets the sequence number of the [`DataPacket`].
+    ///
+    /// **The default value is `0`.**
+    #[inline]
+    pub fn sequence_number<T>(mut self, val: T) -> Self
+    where
+        T: Into<u32>,
+    {
+        self.0.header().set_packet_sequence_number(val.into());
+        self
+    }
+
+    /// Sets the message number of the [`DataPacket`].
+    ///
+    /// **The default value is `0`.**
+    #[inline]
+    pub fn message_number<T>(mut self, val: T) -> Self
+    where
+        T: Into<u32>,
+    {
+        self.0.header().set_message_number(val.into());
+        self
+    }
+
+    /// Sets the order flag of the [`DataPacket`].
+    ///
+    /// **The default value is `false`.**
+    #[inline]
+    pub fn ordered(mut self, val: bool) -> Self {
+        self.0.header().set_ordered(val);
+        self
+    }
+
+    /// Sets the packet position of the [`DataPacket`].
+    ///
+    /// **The default value is [`PacketPosition::Solo`].**
+    #[inline]
+    pub fn packet_position(mut self, val: PacketPosition) -> Self {
+        self.0.header().set_packet_position(val);
+        self
+    }
+
+    /// Sets the retransmitted flag of the [`DataPacket`].
+    ///
+    /// **The default value is `false`.**
+    #[inline]
+    pub fn retransmitted(mut self, val: bool) -> Self {
+        self.0.header().set_retransmitted(val);
+        self
+    }
+
+    #[inline]
+    pub fn body<T>(mut self, val: T) -> Self
+    where
+        T: Into<Bytes>,
+    {
+        self.0.data = val.into();
+        self
+    }
+
+    #[inline]
+    pub fn build(self) -> DataPacket {
         self.0
     }
 }

@@ -39,3 +39,9 @@ impl AddAssign<u32> for MessageNumber {
         self.0 = serial::add::<BITS>(self.0, rhs);
     }
 }
+
+impl From<MessageNumber> for u32 {
+    fn from(src: MessageNumber) -> Self {
+        src.0
+    }
+}

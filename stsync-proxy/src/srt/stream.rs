@@ -8,7 +8,7 @@ use futures::Stream;
 use pin_project::pin_project;
 
 use super::buffer::Buffer;
-use super::utils::Sequence;
+use super::utils::{MessageNumber, Sequence};
 
 #[derive(Debug)]
 #[pin_project]
@@ -17,9 +17,10 @@ where
     S: Stream<Item = Bytes>,
 {
     initial_sequence_number: Sequence,
-    buffer: Buffer<Bytes>,
+    buffer: Buffer<(Bytes, MessageNumber)>,
     #[pin]
     stream: S,
+    next_message_number: MessageNumber,
 }
 
 impl<S> SrtStream<S>
@@ -31,15 +32,16 @@ where
             initial_sequence_number,
             stream,
             buffer: Buffer::new(size),
+            next_message_number: MessageNumber::new(1),
         }
     }
 
-    pub fn get(&self, seq: Sequence) -> Option<&Bytes> {
+    pub fn get(&self, seq: Sequence) -> Option<(&Bytes, MessageNumber)> {
         if seq < self.initial_sequence_number {
             None
         } else {
-            let index = (seq - self.initial_sequence_number).get();
-            self.buffer.get(index as usize)
+            let msg = (seq - self.initial_sequence_number).get();
+            self.buffer.get(msg as usize).map(|(buf, msg)| (buf, *msg))
         }
     }
 }
@@ -48,7 +50,7 @@ impl<S> Stream for SrtStream<S>
 where
     S: Stream<Item = Bytes>,
 {
-    type Item = Bytes;
+    type Item = (Bytes, MessageNumber);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
@@ -56,8 +58,11 @@ where
         match this.stream.poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(val)) => {
-                this.buffer.push(val.clone());
-                Poll::Ready(Some(val))
+                let msgnum = *this.next_message_number;
+
+                this.buffer.push((val.clone(), msgnum));
+                *this.next_message_number += 1;
+                Poll::Ready(Some((val, msgnum)))
             }
             Poll::Ready(None) => Poll::Ready(None),
         }

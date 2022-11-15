@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use futures::sink::{Close, Feed};
 use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
 use tokio::sync::mpsc;
@@ -26,10 +25,10 @@ use super::sink::OutputSink;
 use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
 use super::stream::SrtStream;
-use super::utils::{MessageNumber, Sequence};
+use super::utils::Sequence;
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
-    IsPacket, Packet, PacketPosition, PacketType,
+    IsPacket, Packet, PacketType,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -213,27 +212,19 @@ where
         let timestamp = self.timestamp();
         let this = unsafe { self.get_unchecked_mut() };
 
-        if let ConnectionMode::Request {
-            stream,
-            message_number,
-        } = &mut this.mode
-        {
+        if let ConnectionMode::Request { stream } = &mut this.mode {
             let mut count = 0;
             while let Poll::Ready(res) = stream.poll_next_unpin(cx) {
                 match res {
-                    Some(buf) => {
-                        let mut packet = DataPacket::default();
-                        packet.header.set_packet_type(PacketType::Data);
-                        packet
-                            .header()
-                            .set_packet_sequence_number(this.server_sequence_number.get());
-                        packet.header().set_message_number(message_number.get());
-                        packet.header().set_ordered(true);
-                        packet.header().set_packet_position(PacketPosition::Solo);
-                        packet.data = buf.into();
+                    Some((buf, msgnum)) => {
+                        let packet = DataPacket::builder()
+                            .sequence_number(this.server_sequence_number)
+                            .message_number(msgnum)
+                            .ordered(true)
+                            .body(buf)
+                            .build();
 
                         this.server_sequence_number += 1;
-                        *message_number += 1;
 
                         let mut packet = packet.upcast();
                         packet.header.timestamp = timestamp;
@@ -473,31 +464,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
-        let message_number = match &mut self.mode {
-            ConnectionMode::Request {
-                stream: _,
-                message_number,
-            } => message_number,
-            _ => return Ok(()),
-        };
-
-        let mut packet = DataPacket::default();
-        packet.header.set_packet_type(PacketType::Data);
-        packet
-            .header()
-            .set_packet_sequence_number(self.server_sequence_number.get());
-        packet.header().set_message_number(message_number.get());
-        packet.header().set_ordered(true);
-        packet.header().set_packet_position(PacketPosition::Solo);
-        packet.data = bytes.into();
-
-        self.server_sequence_number += 1;
-        *message_number += 1;
-
-        self.send(packet)
     }
 
     /// Sends a packet to the peer.
@@ -768,10 +734,7 @@ where
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_request_current.inc();
 
-                    self.mode = ConnectionMode::Request {
-                        stream,
-                        message_number: MessageNumber::new(1),
-                    };
+                    self.mode = ConnectionMode::Request { stream };
                 }
                 Some("publish") => {
                     tracing::info!(
@@ -846,15 +809,15 @@ where
         };
 
         for seq in packet.lost_packet_sequence_numbers.iter() {
-            match stream.get(seq.into()).cloned() {
-                Some(buf) => {
-                    // TODO: Keep track of message numbers.
-                    let mut packet = DataPacket::default();
-                    packet.header().set_packet_sequence_number(seq);
-                    packet.header().set_ordered(true);
-                    packet.header().set_retransmitted(true);
-                    packet.header().set_packet_position(PacketPosition::Solo);
-                    packet.data = buf;
+            match stream.get(seq.into()) {
+                Some((buf, msgnum)) => {
+                    let packet = DataPacket::builder()
+                        .sequence_number(seq)
+                        .message_number(msgnum)
+                        .ordered(true)
+                        .retransmitted(true)
+                        .body(buf.clone())
+                        .build();
 
                     let mut packet = packet.upcast();
                     packet.header.timestamp = timestamp;
@@ -1173,7 +1136,6 @@ where
     Publish(OutputSink<S>),
     Request {
         stream: SrtStream<LiveStream<S::Stream>>,
-        message_number: MessageNumber,
     },
 }
 

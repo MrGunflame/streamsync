@@ -27,6 +27,8 @@ use bytes::{Buf, Bytes};
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
+use self::proto::builder::DataPacketBuilder;
+
 /// The SRT version supported by this library.
 pub const VERSION: u32 = 0x00010501;
 
@@ -150,13 +152,31 @@ impl Decode for Header {
 
 unsafe impl Zeroable for Header {}
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DataPacket {
     header: Header,
     data: Bytes,
 }
 
+impl Default for DataPacket {
+    fn default() -> Self {
+        let mut header = Header::default();
+        header
+            .as_data_unchecked()
+            .set_packet_position(PacketPosition::Solo);
+
+        Self {
+            header,
+            data: Bytes::new(),
+        }
+    }
+}
+
 impl DataPacket {
+    pub fn builder() -> DataPacketBuilder {
+        DataPacketBuilder::new()
+    }
+
     pub fn header(&mut self) -> DataHeader<'_> {
         self.header.as_data_unchecked()
     }
@@ -726,7 +746,7 @@ impl<'a> DataHeader<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PacketPosition {
     /// The packet is the first packet of the data stream.
     First,
@@ -735,6 +755,7 @@ pub enum PacketPosition {
     /// The packet is the last packet of the data stream.
     Last,
     /// The packet contains a full data stream.
+    #[default]
     Solo,
 }
 

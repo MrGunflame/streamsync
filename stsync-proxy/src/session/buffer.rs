@@ -58,7 +58,7 @@ impl SessionManager for BufferSessionManager {
         let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
         let session_id = session_id.ok_or(Error::InvalidCredentials)?;
 
-        match self.registry.get(resource_id, session_id) {
+        match self.registry.remove(resource_id, session_id) {
             Some(key) => {
                 if key.session_id != session_id || key.is_expired() {
                     tracing::debug!("Rejecting due to invalid or expired key");
@@ -95,7 +95,7 @@ impl SessionManager for BufferSessionManager {
         let resource_id = resource_id.ok_or(Error::InvalidResourceId)?;
         let session_id = session_id.ok_or(Error::InvalidCredentials)?;
 
-        match self.registry.get(resource_id, session_id) {
+        match self.registry.remove(resource_id, session_id) {
             Some(key) => {
                 if key.session_id != session_id || key.is_expired() {
                     tracing::debug!("Rejecting due to invalid or expired key");
@@ -192,6 +192,24 @@ impl SessionRegistry {
             if key.session_id == session_id {
                 return Some(*key);
             }
+        }
+
+        None
+    }
+
+    pub fn remove(&self, resource_id: ResourceId, session_id: SessionId) -> Option<SessionKey> {
+        let mut inner = self.inner.write();
+        let keys = inner.get_mut(&resource_id)?;
+
+        let mut index = 0;
+        while index < keys.len() {
+            let key = &keys[index];
+
+            if key.session_id == session_id {
+                return Some(keys.remove(index));
+            }
+
+            index += 1;
         }
 
         None

@@ -92,7 +92,7 @@ The nested syntax is unsupported. Providing an invalid StreamID syntax will resu
 FFmpeg supports streaming over SRT. For example to stream a `test.ts` file to `127.0.0.1:9999` you can use the following command:
 
 ```
-ffmpeg -re -i test.ts -acodec copy -vcodec copy -f mpegts 'srt://127.0.0.1:9999?streamid=#!::r=1,s=1,mode=publish'
+ffmpeg -re -i test.ts -acodec copy -vcodec copy -f mpegts 'srt://127.0.0.1:9999?streamid=#!::r=1,s=1,m=publish'
 ```
 Note the use of the `-re` flag, without that flag FFmpeg will not stream but transcode the 
 file to the given output. Adjust `r=1` and `s=1` to your resource and session id accordingly.

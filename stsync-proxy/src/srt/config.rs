@@ -1,7 +1,12 @@
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
+    /// The tuple to bind the server to.
+    pub bind: SocketAddr,
+    /// The number of workers or ``
     pub workers: Option<usize>,
 
     /// The size of `SO_RCVBUF` in bytes.
@@ -11,16 +16,5 @@ pub struct Config {
 
     pub mtu: u32,
     pub flow_window: u32,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            workers: None,
-            rcvbuf: 500_000,
-            sndbuf: 0,
-            mtu: 1500,
-            flow_window: 8192,
-        }
-    }
+    pub buffer: u32,
 }

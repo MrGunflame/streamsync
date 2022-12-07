@@ -14,6 +14,8 @@ pub mod state;
 mod stream;
 mod utils;
 
+pub use config::Config;
+
 use std::{
     collections::HashMap,
     convert::Infallible,

@@ -47,7 +47,7 @@ where
 {
     pub id: ConnectionId,
     state: Shared<State<S>>,
-    metrics: Arc<ConnectionMetrics>,
+    pub metrics: Arc<ConnectionMetrics>,
 
     incoming: mpsc::Receiver<Packet>,
     socket: Shared<SrtSocket>,
@@ -684,6 +684,7 @@ where
 
             packet.extension_field = ExtensionField::HSREQ;
         } else {
+            tracing::debug!("rejecting due to missing HSREQ extension");
             return self.reject(HandshakeType::REJ_ROGUE);
         }
 
@@ -767,9 +768,13 @@ where
 
                     self.mode = ConnectionMode::Publish(OutputSink::new(sink));
                 }
-                _ => return self.reject(HandshakeType::REJ_ROGUE),
+                _ => {
+                    tracing::debug!("rejecting due to invalid STREAMID::mode");
+                    return self.reject(HandshakeType::REJ_ROGUE);
+                }
             }
         } else {
+            tracing::debug!("rejecting due to missing STREAMID extension");
             return self.reject(HandshakeType::REJ_ROGUE);
         }
 

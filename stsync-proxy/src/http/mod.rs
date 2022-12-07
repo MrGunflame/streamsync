@@ -1,6 +1,7 @@
 mod metrics;
 mod v1;
 
+use hyper::header::AUTHORIZATION;
 use hyper::service::service_fn;
 use hyper::{server::conn::Http, Response};
 use hyper::{Body, Request};
@@ -48,6 +49,15 @@ struct Context {
     pub request: Request<Body>,
     path: Path,
     state: State,
+}
+
+impl Context {
+    pub fn authorization(&self) -> Option<&[u8]> {
+        match self.request.headers().get(AUTHORIZATION) {
+            Some(token) => token.as_bytes().strip_prefix(b"Bearer "),
+            None => None,
+        }
+    }
 }
 
 struct Path {

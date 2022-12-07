@@ -87,6 +87,27 @@ The nested syntax is unsupported. Providing an invalid StreamID syntax will resu
 | s   | hex-encoded value       | (Session ID). An arbitrary key for a client. This serves as a authorization token. |
 | m   | `request \| publish` | (Mode). What a client wants to do with a stream. `publish` means the client wants to publish a stream. `request` means a client wants to view a stream. |
 
+## Acquiring a session key
+
+A session id/session key is a hex-encoded integer that allows access to a single stream. 
+Session keys have a limited lifetime of 5 minutes and are single use. This is to prevent
+potential man-in-the-middle attacks.
+
+Before acquiring a session key you need an access token. These defined in `config.json`.
+**They should only be transmitted over a secure connection.** You can then make a HTTP POST
+request to `/v1/streams/:id/sessions`, with the access token attached as a Bearer token in
+the `Authorization` header.
+
+The returned response contains the stream and session id:
+```
+{
+    "resource_id": "1",
+    "session_id": "91bf7a9ed500c8ce"
+}
+```
+
+The session key expires 5 minutes after being issued.
+
 ## Publishing via FFmpeg
 
 FFmpeg supports streaming over SRT. For example to stream a `test.ts` file to `127.0.0.1:9999` you can use the following command:

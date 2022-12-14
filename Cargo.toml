@@ -1,2 +1,2 @@
 [workspace]
-members = ["stsync-proxy", "streamsync-macros", "stsync-gst"]
+members = ["streamsync-api", "stsync-proxy", "streamsync-macros", "stsync-gst", "streamsync-play"]

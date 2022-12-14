@@ -1,0 +1,8 @@
+[package]
+name = "streamsync-play"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamsync-api = { version = "0.1.0", path = "../streamsync-api" }
+tokio = { version = "1.23.0", features = ["macros", "rt-multi-thread"] }

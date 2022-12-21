@@ -14,6 +14,11 @@ async fn main() {
     client.authorize(token);
     let session = Session::create(&client, id).await.unwrap();
 
+    tokio::task::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        std::process::exit(0);
+    });
+
     ffplay(&session.resource_id, &session.session_id);
 }
 

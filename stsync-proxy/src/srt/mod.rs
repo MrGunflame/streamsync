@@ -26,7 +26,7 @@ use std::{
 
 use bytes::{Buf, Bytes};
 
-use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
+use crate::proto::{Bits, Decode, Encode, Zeroable, U32, U8};
 
 /// The SRT version supported by this library.
 pub const VERSION: u32 = 0x00010501;
@@ -1260,7 +1260,19 @@ impl Decode for HandshakeExtensionFlags {
 
 #[derive(Clone, Debug)]
 pub struct KeyMaterialExtension {
-    // TOOO: impl
+    seg0: Bits<U32>,
+    sign: u16,
+    seg1: Bits<U8>,
+    keki: u32,
+    cipher: u8,
+    auth: u8,
+    se: u8,
+    resv2: u8,
+    resv3: u16,
+    slen: u8,
+    klen: u8,
+    salt: Bytes,
+    wrapped_key: Bytes,
 }
 
 impl Encode for KeyMaterialExtension {

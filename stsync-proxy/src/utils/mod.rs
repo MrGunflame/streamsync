@@ -1,4 +1,5 @@
 pub mod serial;
+pub mod timer;
 
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};

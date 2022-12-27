@@ -64,8 +64,11 @@ stream will be roughly 12MB.
 After building the docker image (using the command above) you can run a docker container. **It is recommended to run the container
 in `network=host` mode due to the significant overhead of dockers NAT. Note that this also exposes the HTTP server on 9998 by default.**
 
+It is recommended to bind `config.toml` and `config.json` to allow reconfiguration without rebuilding the image. The default files can be
+found here: [config.toml](https://raw.githubusercontent.com/MrGunflame/streamsync/master/stsync-proxy/config.toml), [config.json](https://raw.githubusercontent.com/MrGunflame/streamsync/master/stsync-proxy/config.json).
+
 ```
-docker run -d --name streamsync -e RUST_LOG0=info --network=host stsync-proxy:latest
+docker run -d -v config.toml:/config.toml -v config.json:/config.json --name streamsync -e RUST_LOG=info --network=host stsync-proxy:latest
 ```
 
 The default configuration binds the SRT server to `0.0.0.0:9999`. It additionally binds a

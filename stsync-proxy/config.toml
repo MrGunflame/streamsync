@@ -7,8 +7,8 @@ bind = "0.0.0.0:9999"
 # Auto
 # workers = 32
 
-so_rcvbuf = 500_000
-so_sndbuf = 0
+rcvbuf = 500_000
+sndbuf = 0
 
 mtu = 1500
 flow-window = 8192

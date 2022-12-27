@@ -12,10 +12,11 @@
 <body>
     <script>
         function submit() {
+            let base = document.getElementById("in-base").value;
             let sid = document.getElementById("in-sid").value;
             let token = document.getElementById("in-token").value;
 
-            fetch("http://127.0.0.1:9998/v1/streams/" + sid + "/sessions", {
+            fetch(base + "/v1/streams/" + sid + "/sessions", {
                 method: "POST",
                 headers: {
                     "Authorization": "Bearer " + token,
@@ -39,6 +40,10 @@
                 });
         }
     </script>
+
+    <span>API base (with scheme, without trailing slash):</span>
+    <input id="in-base" />
+    <br>
 
     <span>Stream Id:</span>
     <input id="in-sid" />

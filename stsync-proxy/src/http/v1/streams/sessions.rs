@@ -14,6 +14,7 @@ pub(super) async fn route(mut ctx: Context, id: ResourceId) -> Response<Body> {
             Ok(sid) => match ctx.request.method() {
                 &Method::GET => get(ctx, id, sid).await,
                 &Method::DELETE => delete(ctx, id, sid).await,
+                &Method::OPTIONS => Response::builder().status(204).body(Body::empty()).unwrap(),
                 _ => Response::builder().status(405).body(Body::empty()).unwrap(),
             },
             Err(_) => Response::builder()
@@ -24,6 +25,7 @@ pub(super) async fn route(mut ctx: Context, id: ResourceId) -> Response<Body> {
         None => match ctx.request.method() {
             &Method::GET => list(ctx, id).await,
             &Method::POST => create(ctx, id).await,
+            &Method::OPTIONS => Response::builder().status(204).body(Body::empty()).unwrap(),
             _ => Response::builder().status(405).body(Body::empty()).unwrap(),
         },
     }

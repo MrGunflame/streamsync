@@ -1,7 +1,11 @@
 mod metrics;
 mod v1;
 
-use hyper::header::AUTHORIZATION;
+use hyper::header::{
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, ORIGIN,
+};
+use hyper::http::HeaderValue;
 use hyper::service::service_fn;
 use hyper::{server::conn::Http, Response};
 use hyper::{Body, Request};
@@ -18,6 +22,8 @@ pub async fn serve(state: State) {
         let state = state.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
+                let origin = req.headers().get(ORIGIN).cloned();
+
                 let mut ctx = Context {
                     state: state.clone(),
                     path: Path::new(req.uri().path()),
@@ -25,7 +31,7 @@ pub async fn serve(state: State) {
                 };
 
                 async move {
-                    let resp = match ctx.path.take() {
+                    let mut resp = match ctx.path.take() {
                         Some(path) if path == "v1" => v1::route(ctx).await,
                         Some(path) if path == "metrics" => metrics::metrics(ctx).await,
                         _ => Response::builder()
@@ -33,6 +39,23 @@ pub async fn serve(state: State) {
                             .body(Body::from("Not Found"))
                             .unwrap(),
                     };
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_METHODS,
+                        HeaderValue::from_static("POST"),
+                    );
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                        HeaderValue::from_static("true"),
+                    );
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_HEADERS,
+                        HeaderValue::from_static("content-type, authorization"),
+                    );
+
+                    if let Some(origin) = origin {
+                        resp.headers_mut()
+                            .append(ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
+                    }
 
                     Ok::<_, hyper::Error>(resp)
                 }

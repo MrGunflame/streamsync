@@ -445,12 +445,17 @@ where
                 bytes_recv_rate = self.metrics.data_bytes_recv.get() as u32 / timespan;
             }
 
+            let sink = match &self.mode {
+                ConnectionMode::Publish(sink) => sink,
+                _ => unreachable!(),
+            };
+
             let packet = Ack::builder()
                 .acknowledgement_number(self.server_sequence_number.get())
                 .last_acknowledged_packet_sequence_number(self.client_sequence_number.get())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
-                .avaliable_buffer_size(8192)
+                .avaliable_buffer_size(sink.capacity() as u32)
                 .packets_receiving_rate(packets_recv_rate)
                 .estimated_link_capacity(packets_recv_rate)
                 .receiving_rate(bytes_recv_rate)

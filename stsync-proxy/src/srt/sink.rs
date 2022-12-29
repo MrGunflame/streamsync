@@ -49,6 +49,12 @@ where
         }
     }
 
+    /// Returns the remaining capacity in the output buffer.
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.queue.len()
+    }
+
     /// Write to output sink with latency.
     fn poll_write(
         self: Pin<&mut Self>,
@@ -136,6 +142,11 @@ impl SegmentQueue {
     }
 
     pub fn push(&mut self, mut packet: DataPacket) {
+        // Prevent memory exhaustion from slow receivers or attacks.
+        if self.len() > 8192 {
+            return;
+        }
+
         let sequence = Sequence::new(packet.packet_sequence_number());
         let message_number = MessageNumber::new(packet.header().message_number());
         let delivery_time =
@@ -169,17 +180,6 @@ impl SegmentQueue {
             sleep: None,
             _pin: PhantomPinned,
         }
-    }
-
-    pub fn remove(&mut self, sequence: u32) {
-        self.queue.retain(|segment| {
-            if segment.sequence == sequence {
-                self.size -= segment.payload.len();
-                false
-            } else {
-                true
-            }
-        });
     }
 
     pub fn len(&self) -> usize {

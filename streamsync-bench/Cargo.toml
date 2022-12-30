@@ -1,0 +1,10 @@
+[package]
+name = "streamsync-bench"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+streamsync-api = { version = "*", path = "../streamsync-api" }
+tokio = { version = "1.23.0", features = ["full"] }

@@ -41,11 +41,16 @@ where
     S: SessionManager,
 {
     /// Creates a new `OutputSink` using `sink` as the underlying [`Sink`].
-    pub fn new(sink: LiveSink<S::Sink>, start: Instant, latency: Duration) -> Self {
+    pub fn new(
+        sink: LiveSink<S::Sink>,
+        start: Instant,
+        latency: Duration,
+        buffer_size: usize,
+    ) -> Self {
         Self {
             next_msgnum: Wrapping(1),
             sink,
-            queue: SegmentQueue::new(start, latency),
+            queue: SegmentQueue::new(start, latency, buffer_size),
         }
     }
 
@@ -129,21 +134,23 @@ struct SegmentQueue {
     size: usize,
     start: Instant,
     latency: Duration,
+    buffer_size: usize,
 }
 
 impl SegmentQueue {
-    pub fn new(start: Instant, latency: Duration) -> Self {
+    pub fn new(start: Instant, latency: Duration, buffer_size: usize) -> Self {
         Self {
             queue: BTreeSet::new(),
             size: 0,
             start,
             latency,
+            buffer_size,
         }
     }
 
     pub fn push(&mut self, mut packet: DataPacket) {
         // Prevent memory exhaustion from slow receivers or attacks.
-        if self.len() > 8192 {
+        if self.len() > self.buffer_size {
             return;
         }
 

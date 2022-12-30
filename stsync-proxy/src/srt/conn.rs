@@ -697,7 +697,6 @@ where
                 return self.reject(HandshakeType::REJ_ROGUE);
             }
 
-            // Static 1s delay
             // The recommended delay is 4*RTT, making this a suitable value for
             // networks with up to 250ms delay.
             // Also see https://github.com/Haivision/srt/issues/1630#issuecomment-719384626
@@ -762,7 +761,11 @@ where
                         }
                     };
 
-                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
+                    let stream = SrtStream::new(
+                        stream,
+                        self.state().config.buffer as usize,
+                        self.client_sequence_number,
+                    );
 
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_request_current.inc();
@@ -802,6 +805,7 @@ where
                         sink,
                         self.start_time,
                         self.latency,
+                        self.state().config.buffer as usize,
                     ));
                 }
                 _ => {

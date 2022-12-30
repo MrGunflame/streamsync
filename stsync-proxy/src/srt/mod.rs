@@ -29,7 +29,10 @@ use bytes::{Buf, Bytes};
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32};
 
-use self::proto::builder::DataPacketBuilder;
+use self::{
+    proto::{builder::DataPacketBuilder, Timestamp},
+    utils::MessageNumber,
+};
 
 /// The SRT version supported by this library.
 pub const VERSION: u32 = 0x00010501;
@@ -72,7 +75,7 @@ pub struct Header {
     seg0: Bits<U32>,
     /// Packet type dependant.
     seg1: Bits<U32>,
-    timestamp: u32,
+    timestamp: Timestamp,
     destination_socket_id: u32,
 }
 
@@ -218,9 +221,8 @@ impl DataPacket {
         self.header.seg1.bits(5).0 as u8
     }
 
-    pub fn message_number(&self) -> u32 {
-        // 26 bits
-        self.header.seg1.bits(6..32).0
+    pub fn message_number(&mut self) -> MessageNumber {
+        self.header().message_number()
     }
 }
 
@@ -739,8 +741,9 @@ impl<'a> DataHeader<'a> {
         self.header.seg1.set_bits(5, n as u32);
     }
 
-    pub fn message_number(&self) -> u32 {
-        self.header.seg1.bits(6..32).0
+    pub fn message_number(&self) -> MessageNumber {
+        let bits = self.header.seg1.bits(6..32).0;
+        unsafe { MessageNumber::new_unchecked(bits) }
     }
 
     pub fn set_message_number(&mut self, n: u32) {

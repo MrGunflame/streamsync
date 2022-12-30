@@ -16,6 +16,14 @@ impl Sequence {
     /// Creates a new `Sequence` with the given initial `seq`.
     #[inline]
     pub const fn new(seq: u32) -> Self {
+        assert!(seq <= (1 << BITS) - 1, "Sequence::new overflow");
+
+        unsafe { Self::new_unchecked(seq) }
+    }
+
+    pub const unsafe fn new_unchecked(seq: u32) -> Self {
+        debug_assert!(seq <= (1 << BITS) - 1, "Sequence::new_unchecked overflow");
+
         Self(seq)
     }
 

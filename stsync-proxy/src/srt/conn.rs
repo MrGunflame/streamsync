@@ -20,7 +20,7 @@ use crate::srt::{EncryptionField, HandshakeType, VERSION};
 use crate::utils::Shared;
 
 use super::metrics::ConnectionMetrics;
-use super::proto::{Ack, AckAck, DropRequest, Handshake, Keepalive, Shutdown};
+use super::proto::{Ack, AckAck, DropRequest, Handshake, Keepalive, Shutdown, Timestamp};
 use super::sink::OutputSink;
 use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
@@ -150,8 +150,9 @@ where
         unsafe { self.state.as_ref() }
     }
 
-    fn timestamp(&self) -> u32 {
-        self.start_time.elapsed().as_micros() as u32
+    #[inline]
+    fn timestamp(&self) -> Timestamp {
+        Timestamp::from_micros(self.start_time.elapsed().as_micros() as u32)
     }
 
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {

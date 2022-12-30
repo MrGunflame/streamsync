@@ -14,7 +14,16 @@ pub struct MessageNumber(u32);
 impl MessageNumber {
     #[inline]
     pub const fn new(num: u32) -> Self {
-        debug_assert!(num <= (1 << BITS) - 1, "MessageNumber::new overflow");
+        assert!(num <= (1 << BITS) - 1, "MessageNumber::new overflow");
+
+        unsafe { Self::new_unchecked(num) }
+    }
+
+    pub const unsafe fn new_unchecked(num: u32) -> Self {
+        debug_assert!(
+            num <= (1 << BITS) - 1,
+            "MessageNumber::new_unchecked overflow"
+        );
 
         Self(num)
     }

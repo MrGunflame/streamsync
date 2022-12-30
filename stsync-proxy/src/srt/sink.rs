@@ -148,9 +148,8 @@ impl SegmentQueue {
         }
 
         let sequence = Sequence::new(packet.packet_sequence_number());
-        let message_number = MessageNumber::new(packet.header().message_number());
-        let delivery_time =
-            self.start + Duration::from_micros(packet.header.timestamp as u64) + self.latency;
+        let message_number = packet.message_number();
+        let delivery_time = self.start + packet.header.timestamp.to_duration() + self.latency;
 
         self.size += packet.data.len();
         self.queue.insert(Segment {

@@ -1,6 +1,10 @@
 pub mod builder;
 pub mod header;
 
+mod timestamp;
+
+pub use timestamp::Timestamp;
+
 use std::{
     io::Write,
     ops::{Range, RangeInclusive},

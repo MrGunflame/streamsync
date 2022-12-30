@@ -11,6 +11,7 @@ use super::state::{ConnectionId, State};
 use super::IsPacket;
 use super::{Error, HandshakeType};
 use crate::session::SessionManager;
+use crate::srt::proto::Timestamp;
 use crate::srt::{EncryptionField, ExtensionField};
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
@@ -67,7 +68,7 @@ where
     let syn_cookie = state.random();
 
     let mut resp = Handshake::default();
-    resp.header.timestamp = 0;
+    resp.header.timestamp = Timestamp::default();
     resp.header.destination_socket_id = client_socket_id;
 
     resp.handshake_type = HandshakeType::INDUCTION;

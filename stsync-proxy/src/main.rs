@@ -1,4 +1,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unused_crate_dependencies)]
+
+// We only import log to remove trace and debug levels at compile time.
+use log as _;
 
 use clap::Parser;
 use config::Config;

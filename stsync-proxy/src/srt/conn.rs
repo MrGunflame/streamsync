@@ -15,6 +15,7 @@ use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{event, span, Level, Span};
 
 use crate::session::{LiveStream, SessionManager};
+use crate::signal::ShutdownListener;
 use crate::srt::proto::Nak;
 use crate::srt::{EncryptionField, HandshakeType, VERSION};
 use crate::utils::Shared;
@@ -86,6 +87,8 @@ where
     ///
     /// The value is in milliseconds, not in microseconds.
     latency: Duration,
+
+    shutdown: Pin<Box<ShutdownListener>>,
 }
 
 impl<S> Connection<S>
@@ -135,6 +138,7 @@ where
             client_sequence_number: Sequence::new(seqnum),
             loss_list: LossList::new(),
             latency: Duration::ZERO,
+            shutdown: Box::pin(ShutdownListener::new()),
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -420,6 +424,11 @@ where
     }
 
     fn tick(&mut self) -> Result<()> {
+        // Server initiated shutdown.
+        if self.shutdown.in_progress() {
+            return self.close();
+        }
+
         // Drop the connection after 15s of no response from the peer.
         if self.last_time.elapsed() >= Duration::from_secs(15) {
             return self.close();
@@ -512,8 +521,6 @@ where
         } else {
             self.poll_state = PollState::Closed;
         }
-
-        close_metrics(self);
 
         Ok(())
     }

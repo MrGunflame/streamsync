@@ -13,6 +13,7 @@ mod http;
 mod metrics;
 mod proto;
 mod session;
+mod signal;
 mod srt;
 mod state;
 mod utils;
@@ -25,6 +26,7 @@ pub struct Args {
 }
 
 fn main() {
+    signal::init();
     pretty_env_logger::init();
 
     let args = Args::parse();
@@ -60,5 +62,8 @@ async fn async_main(config: Config) {
         });
     }
 
-    tokio::signal::ctrl_c().await.unwrap();
+    // Wait for a shutdown signal (SIGINT|SIGTERM), then gracefully shut down.
+    // See `signal` module for more details.
+    signal::SHUTDOWN.wait().await;
+    println!("Bye");
 }

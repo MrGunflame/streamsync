@@ -1156,6 +1156,14 @@ impl HandshakeExtensionFlags {
     pub const fn has_rexmitflg(self) -> bool {
         self.0 & Self::REXMITFLG.0 != 0
     }
+
+    /// Returns `true` if the [`STREAM`] flag is set.
+    ///
+    /// `STREAM`: Self::STREAM
+    #[inline]
+    pub const fn has_stream(self) -> bool {
+        self.0 & Self::STREAM.0 != 0
+    }
 }
 
 impl BitAnd for HandshakeExtensionFlags {

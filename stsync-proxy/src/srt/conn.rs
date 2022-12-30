@@ -678,10 +678,22 @@ where
         packet.srt_socket_id = self.id.server_socket_id.0;
         packet.initial_packet_sequence_number = self.server_sequence_number.get();
 
+        // The HSREQ extension is required for TSBD.
+        // The CONFIG extension is required for stream authentication.
+        if !packet.extension_field.hsreq() || !packet.extension_field.config() {
+            return self.reject(HandshakeType::REJ_ROGUE);
+        }
+
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
             // The CRYPT and REXMITFLG flags must always be set.
             if !ext.srt_flags.has_crypt() || !ext.srt_flags.has_rexmitflg() {
+                return self.reject(HandshakeType::REJ_ROGUE);
+            }
+
+            // The STREAM flag enables buffer mode and must not be set as this server
+            // will only ever serve live streams.
+            if ext.srt_flags.has_stream() {
                 return self.reject(HandshakeType::REJ_ROGUE);
             }
 
@@ -856,6 +868,8 @@ where
                 }
                 None => {
                     let dropreq = DropRequest::builder()
+                        // Message number of zero indicates we don't know the actual
+                        // message number anymore.
                         .message_number(0)
                         .first_packet_sequence_number(packet.lost_packet_sequence_numbers.first())
                         .last_packet_sequence_number(packet.lost_packet_sequence_numbers.last())

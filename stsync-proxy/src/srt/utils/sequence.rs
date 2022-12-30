@@ -1,7 +1,7 @@
 //!
 //! See https://datatracker.ietf.org/doc/html/rfc1982
 use std::cmp::Ordering;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Binary, Display, Formatter, LowerHex, Octal, UpperHex};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use crate::utils::serial;
@@ -14,6 +14,10 @@ pub struct Sequence(u32);
 
 impl Sequence {
     /// Creates a new `Sequence` with the given initial `seq`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given value exceeds the maximum serial value of `(1 << 31) - 1`.
     #[inline]
     pub const fn new(seq: u32) -> Self {
         assert!(seq <= (1 << BITS) - 1, "Sequence::new overflow");
@@ -21,6 +25,13 @@ impl Sequence {
         unsafe { Self::new_unchecked(seq) }
     }
 
+    /// Creates a new `Sequence` with the given initial value without checking that it fits into
+    /// the serial range.
+    ///
+    /// # Safety
+    ///
+    /// Calling this function with a value greater than `(1 << 31) -1` is undefined behavoir.
+    #[inline]
     pub const unsafe fn new_unchecked(seq: u32) -> Self {
         debug_assert!(seq <= (1 << BITS) - 1, "Sequence::new_unchecked overflow");
 
@@ -78,12 +89,14 @@ impl PartialEq<u32> for Sequence {
 }
 
 impl PartialOrd for Sequence {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Sequence {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         serial::cmp::<BITS>(self.0, other.0)
     }
@@ -110,55 +123,41 @@ impl From<u32> for Sequence {
     }
 }
 
-impl Display for Sequence {
+//
+// ----- impl core::fmt -----
+//
+
+impl Binary for Sequence {
     #[inline]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        Binary::fmt(&self.0, f)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Sequence;
-
-    #[test]
-    fn test_sequence() {
-        let mut seq = Sequence::new(0);
-        assert_eq!(seq.0, 0);
-
-        seq += 1;
-        assert_eq!(seq.0, 1);
-
-        seq += (1 << 31) - 2;
-        assert_eq!(seq.0, (1 << 31) - 1);
-
-        seq += 255;
-        assert_eq!(seq.0, 254);
+impl Display for Sequence {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
     }
+}
 
-    #[test]
-    fn test_sequence_partial_cmp() {
-        let mut seq = Sequence::new(0);
+impl LowerHex for Sequence {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        LowerHex::fmt(&self.0, f)
+    }
+}
 
-        assert!(seq == 0);
-        assert!(seq < 1);
+impl UpperHex for Sequence {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        UpperHex::fmt(&self.0, f)
+    }
+}
 
-        seq += 2000;
-
-        assert!(seq > 1999);
-        assert!(seq == 2000);
-        assert!(seq < 2001);
-
-        let mut seq = Sequence::new(u32::MAX);
-
-        assert!(seq == u32::MAX);
-        assert!(seq > u32::MAX - 1);
-        assert!(seq < 0);
-
-        seq += 1;
-
-        assert!(seq == 0);
-        assert!(seq > u32::MAX);
-        assert!(seq < 1);
+impl Octal for Sequence {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Octal::fmt(&self.0, f)
     }
 }

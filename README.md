@@ -206,8 +206,8 @@ no connections currently. All metrics share a `id` label that uniquely identifie
 
 ### Todo list
 
-- [ ] Workers
-- [ ] TSDBD (especially for the reciver)
+- [x] Workers
+- [x] TSDBD (especially for the reciver)
 - [ ] AES encryption
 - [ ] A secure way to bootstrap the AES encryption and exchange resource/session ids
 - [ ] Potentially an OBS plugin that automates configuration

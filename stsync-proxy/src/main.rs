@@ -2,7 +2,7 @@
 
 use clap::Parser;
 use config::Config;
-use session::{buffer::BufferSessionManager, file::FileSessionManager};
+use session::buffer::BufferSessionManager;
 use srt::server::Server;
 use state::State;
 use tokio::runtime::Builder;

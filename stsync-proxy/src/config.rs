@@ -1,11 +1,8 @@
-use std::fmt::{self, Formatter};
 use std::fs::File;
 use std::io::Read;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::path::Path;
 
-use serde::de::{self, DeserializeOwned, Deserializer, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::srt;

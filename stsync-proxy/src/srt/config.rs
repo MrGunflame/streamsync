@@ -17,4 +17,7 @@ pub struct Config {
     pub mtu: u32,
     pub flow_window: u32,
     pub buffer: u32,
+
+    /// Latency in millis
+    pub latency: u16,
 }

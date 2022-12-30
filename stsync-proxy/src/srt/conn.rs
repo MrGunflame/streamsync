@@ -85,7 +85,7 @@ where
     /// the bigger value of the proposed values of both sides.
     ///
     /// The value is in milliseconds, not in microseconds.
-    latency: u16,
+    latency: Duration,
 }
 
 impl<S> Connection<S>
@@ -134,7 +134,7 @@ where
             server_sequence_number: Sequence::new(seqnum),
             client_sequence_number: Sequence::new(seqnum),
             loss_list: LossList::new(),
-            latency: 0,
+            latency: Duration::ZERO,
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -445,12 +445,17 @@ where
                 bytes_recv_rate = self.metrics.data_bytes_recv.get() as u32 / timespan;
             }
 
+            let sink = match &self.mode {
+                ConnectionMode::Publish(sink) => sink,
+                _ => unreachable!(),
+            };
+
             let packet = Ack::builder()
                 .acknowledgement_number(self.server_sequence_number.get())
                 .last_acknowledged_packet_sequence_number(self.client_sequence_number.get())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
-                .avaliable_buffer_size(8192)
+                .avaliable_buffer_size(sink.buffer_left() as u32)
                 .packets_receiving_rate(packets_recv_rate)
                 .estimated_link_capacity(packets_recv_rate)
                 .receiving_rate(bytes_recv_rate)
@@ -547,7 +552,7 @@ where
             // We attempt to recover the lost packet only if we can expect it to arrive
             // before we would have already consumed it. If we cannot receive the lost
             // packet in time we ignore it.
-            if self.rtt.is_reachable(self.latency as u32 * 1000) {
+            if self.rtt.is_reachable(self.latency) {
                 // We attempt to recover the lost packet by sending NAK right away. We don't
                 // actually validate that it reaches its destination. If it gets lost we simply
                 // skip the packet.
@@ -672,9 +677,16 @@ where
                 return self.reject(HandshakeType::REJ_ROGUE);
             }
 
-            ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
+            // Static 1s delay
+            // The recommended delay is 4*RTT, making this a suitable value for
+            // networks with up to 250ms delay.
+            // Also see https://github.com/Haivision/srt/issues/1630#issuecomment-719384626
+            ext.sender_tsbpd_delay = self.state().config.latency;
+            ext.receiver_tsbpd_delay = self.state().config.latency;
 
-            self.latency = ext.sender_tsbpd_delay;
+            self.latency = Duration::from_millis(ext.sender_tsbpd_delay as u64);
+
+            tracing::debug!("Agreed on stream latency of {:?}", self.latency);
 
             packet.extensions.0.push(HandshakeExtension {
                 extension_type: ExtensionType::HSRSP,
@@ -766,7 +778,11 @@ where
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_publish_current.inc();
 
-                    self.mode = ConnectionMode::Publish(OutputSink::new(sink));
+                    self.mode = ConnectionMode::Publish(OutputSink::new(
+                        sink,
+                        self.start_time,
+                        self.latency,
+                    ));
                 }
                 _ => {
                     tracing::debug!("rejecting due to invalid STREAMID::mode");
@@ -1182,8 +1198,8 @@ impl Rtt {
     /// Returns `true` if the peer with the current `Rtt` is expected to be reachable in the
     /// time `n`. `n` is specified in microseconds.
     #[inline]
-    pub const fn is_reachable(&self, n: u32) -> bool {
-        self.rtt < n
+    pub const fn is_reachable(&self, n: Duration) -> bool {
+        self.rtt < n.as_micros() as u32
     }
 }
 

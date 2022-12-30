@@ -1,5 +1,6 @@
 //!
 //! See https://datatracker.ietf.org/doc/html/rfc1982
+use std::fmt::{self, Display, Formatter};
 use std::ops::{Add, AddAssign};
 
 use crate::utils::serial;
@@ -7,7 +8,7 @@ use crate::utils::serial;
 const BITS: usize = 26;
 
 /// A 26-bit message number.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MessageNumber(u32);
 
 impl MessageNumber {
@@ -41,7 +42,15 @@ impl AddAssign<u32> for MessageNumber {
 }
 
 impl From<MessageNumber> for u32 {
+    #[inline]
     fn from(src: MessageNumber) -> Self {
         src.0
+    }
+}
+
+impl Display for MessageNumber {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
     }
 }

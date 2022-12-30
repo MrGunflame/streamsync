@@ -80,7 +80,7 @@ impl Shutdown {
     fn dec(&self) {
         self.counter.fetch_sub(1, Ordering::AcqRel);
 
-        if self.counter.load(Ordering::Acquire) == 0 {
+        if self.in_progress.load(Ordering::Acquire) && self.counter.load(Ordering::Acquire) == 0 {
             self.notify_done.notify_waiters();
         }
     }

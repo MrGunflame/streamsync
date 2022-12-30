@@ -413,10 +413,9 @@ where
                         tracing::warn!("Unhandled DropReq");
                         Ok(())
                     }
-                    ControlPacketType::PeerError => {
-                        tracing::warn!("Unhandled PeerError");
-                        Ok(())
-                    }
+                    // The peer error packet is only used for file transmission congestion
+                    // control and not used for live streams.
+                    ControlPacketType::PeerError => Ok(()),
                     ControlPacketType::UserDefined => Ok(()),
                 }
             }
@@ -892,10 +891,6 @@ where
     }
 
     fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<()> {
-        Ok(())
-    }
-
-    fn handle_peer_error(&mut self, _packet: Packet) -> Result<()> {
         Ok(())
     }
 }

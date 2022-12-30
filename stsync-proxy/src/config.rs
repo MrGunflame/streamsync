@@ -49,6 +49,7 @@ pub struct Srt {
     #[serde(rename = "flow-window")]
     pub flow_window: u32,
     pub buffer: u32,
+    pub latency: u16,
 }
 
 impl From<Srt> for srt::Config {
@@ -61,6 +62,7 @@ impl From<Srt> for srt::Config {
             buffer: src.buffer,
             rcvbuf: src.rcvbuf,
             sndbuf: src.sndbuf,
+            latency: src.latency,
         }
     }
 }

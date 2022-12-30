@@ -681,8 +681,8 @@ where
             // The recommended delay is 4*RTT, making this a suitable value for
             // networks with up to 250ms delay.
             // Also see https://github.com/Haivision/srt/issues/1630#issuecomment-719384626
-            ext.sender_tsbpd_delay = 1000;
-            ext.receiver_tsbpd_delay = 1000;
+            ext.sender_tsbpd_delay = self.state().config.latency;
+            ext.receiver_tsbpd_delay = self.state().config.latency;
 
             self.latency = Duration::from_millis(ext.sender_tsbpd_delay as u64);
 

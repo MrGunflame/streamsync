@@ -14,6 +14,10 @@ mtu = 1500
 flow-window = 8192
 buffer = 8192
 
+# SRT TSBPD tx/rx peer latency in milliseconds.
+# Recommended to be at least 4 * RTT.
+latency = 1000
+
 [http]
 enabled = true
 bind = "0.0.0.0:9998"

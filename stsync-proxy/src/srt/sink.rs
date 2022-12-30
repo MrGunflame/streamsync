@@ -51,8 +51,8 @@ where
 
     /// Returns the remaining capacity in the output buffer.
     #[inline]
-    pub fn capacity(&self) -> usize {
-        self.queue.len()
+    pub fn buffer_left(&self) -> usize {
+        8192 - self.queue.len()
     }
 
     /// Write to output sink with latency.

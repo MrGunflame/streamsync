@@ -455,7 +455,7 @@ where
                 .last_acknowledged_packet_sequence_number(self.client_sequence_number.get())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
-                .avaliable_buffer_size(sink.capacity() as u32)
+                .avaliable_buffer_size(sink.buffer_left() as u32)
                 .packets_receiving_rate(packets_recv_rate)
                 .estimated_link_capacity(packets_recv_rate)
                 .receiving_rate(bytes_recv_rate)
@@ -677,7 +677,12 @@ where
                 return self.reject(HandshakeType::REJ_ROGUE);
             }
 
-            ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
+            // Static 1s delay
+            // The recommended delay is 4*RTT, making this a suitable value for
+            // networks with up to 250ms delay.
+            // Also see https://github.com/Haivision/srt/issues/1630#issuecomment-719384626
+            ext.sender_tsbpd_delay = 1000;
+            ext.receiver_tsbpd_delay = 1000;
 
             self.latency = Duration::from_millis(ext.sender_tsbpd_delay as u64);
 

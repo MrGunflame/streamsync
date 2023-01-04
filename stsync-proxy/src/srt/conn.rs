@@ -1299,9 +1299,9 @@ impl TransmissionQueue {
     }
 
     pub fn pop(&mut self) -> Option<Packet> {
-        match self.prio.remove(0) {
+        match self.prio.pop_front() {
             Some(packet) => Some(packet),
-            None => self.queue.remove(0),
+            None => self.queue.pop_front(),
         }
     }
 

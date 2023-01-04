@@ -164,6 +164,8 @@ where
 
         // End of timestamp wrapping period.
         if self.timestamp_is_wrapping && !timestamp.is_wrapping() {
+            event!(parent: &self.resource_span, Level::DEBUG, "entered TS wrapping period");
+
             self.start_time = Instant::now();
             self.timestamp_is_wrapping = false;
 
@@ -174,6 +176,8 @@ where
 
         // Starting a timestamp wrapping period.
         if timestamp.is_wrapping() {
+            event!(parent: &self.resource_span, Level::DEBUG, "leaving TS wrapping period");
+
             self.timestamp_is_wrapping = true;
         }
 

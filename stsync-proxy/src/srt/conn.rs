@@ -55,6 +55,9 @@ where
 
     /// Time of the first sent packet.
     start_time: Instant,
+    /// Whether the timestamp is currently in a wrapping period. Once the timestamp wraps around,
+    /// it should reset `start_time`.
+    timestamp_is_wrapping: bool,
 
     server_sequence_number: Sequence,
     client_sequence_number: Sequence,
@@ -127,6 +130,7 @@ where
             rtt: Rtt::new(),
             tick_interval: TickInterval::new(),
             start_time: Instant::now(),
+            timestamp_is_wrapping: false,
             socket: socket.into(),
             last_time: Instant::now(),
             poll_state: PollState::default(),
@@ -155,8 +159,25 @@ where
     }
 
     #[inline]
-    fn timestamp(&self) -> Timestamp {
-        Timestamp::from_micros(self.start_time.elapsed().as_micros() as u32)
+    fn timestamp(&mut self) -> Timestamp {
+        let timestamp = Timestamp::from_micros(self.start_time.elapsed().as_micros() as u32);
+
+        // End of timestamp wrapping period.
+        if self.timestamp_is_wrapping && !timestamp.is_wrapping() {
+            self.start_time = Instant::now();
+            self.timestamp_is_wrapping = false;
+
+            if let ConnectionMode::Publish(sink) = &mut self.mode {
+                sink.update_start(self.start_time);
+            }
+        }
+
+        // Starting a timestamp wrapping period.
+        if timestamp.is_wrapping() {
+            self.timestamp_is_wrapping = true;
+        }
+
+        timestamp
     }
 
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {

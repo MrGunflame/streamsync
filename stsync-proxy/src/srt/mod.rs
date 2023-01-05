@@ -893,7 +893,7 @@ impl Encode for Extensions {
 impl Decode for Extensions {
     type Error = Error;
 
-    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
@@ -1029,7 +1029,7 @@ impl Encode for HandshakeExtension {
 impl Decode for HandshakeExtension {
     type Error = Error;
 
-    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {

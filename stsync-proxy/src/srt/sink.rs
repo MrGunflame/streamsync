@@ -54,6 +54,12 @@ where
         }
     }
 
+    /// Update the starting [`Instant`] of the sink.
+    #[inline]
+    pub fn update_start(&mut self, instant: Instant) {
+        self.queue.start = instant;
+    }
+
     /// Returns the remaining capacity in the output buffer.
     #[inline]
     pub fn buffer_left(&self) -> usize {

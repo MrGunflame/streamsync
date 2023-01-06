@@ -15,6 +15,8 @@ pub mod state;
 mod stream;
 mod utils;
 
+pub use config::Config;
+
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -27,6 +29,11 @@ use std::{
 use bytes::{Buf, Bytes};
 
 use crate::proto::{Bits, Decode, Encode, Zeroable, U32, U8};
+
+use self::{
+    proto::{builder::DataPacketBuilder, Timestamp},
+    utils::MessageNumber,
+};
 
 /// The SRT version supported by this library.
 pub const VERSION: u32 = 0x00010501;
@@ -43,6 +50,8 @@ pub enum Error {
     InvalidControlType(u16),
     #[error("invalid extension type {0}")]
     InvalidExtensionType(u16),
+    #[error("invalid encryption field {0}")]
+    InvalidEncryptionField(u16),
     #[error("{0}")]
     FromUtf8Error(std::str::Utf8Error),
     #[error("unsupported extension {0:?}")]
@@ -67,7 +76,7 @@ pub struct Header {
     seg0: Bits<U32>,
     /// Packet type dependant.
     seg1: Bits<U32>,
-    timestamp: u32,
+    timestamp: Timestamp,
     destination_socket_id: u32,
 }
 
@@ -149,13 +158,31 @@ impl Decode for Header {
 
 unsafe impl Zeroable for Header {}
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct DataPacket {
     header: Header,
     data: Bytes,
 }
 
+impl Default for DataPacket {
+    fn default() -> Self {
+        let mut header = Header::default();
+        header
+            .as_data_unchecked()
+            .set_packet_position(PacketPosition::Solo);
+
+        Self {
+            header,
+            data: Bytes::new(),
+        }
+    }
+}
+
 impl DataPacket {
+    pub fn builder() -> DataPacketBuilder {
+        DataPacketBuilder::new()
+    }
+
     pub fn header(&mut self) -> DataHeader<'_> {
         self.header.as_data_unchecked()
     }
@@ -168,7 +195,7 @@ impl DataPacket {
         match self.header.seg1.bits(0..2).0 {
             0b10 => PacketPosition::First,
             0b00 => PacketPosition::Middle,
-            0b11 => PacketPosition::Full,
+            0b11 => PacketPosition::Solo,
             _ => unreachable!(),
         }
     }
@@ -195,9 +222,8 @@ impl DataPacket {
         self.header.seg1.bits(5).0 as u8
     }
 
-    pub fn message_number(&self) -> u32 {
-        // 26 bits
-        self.header.seg1.bits(6..32).0
+    pub fn message_number(&mut self) -> MessageNumber {
+        self.header().message_number()
     }
 }
 
@@ -360,162 +386,62 @@ impl TryFrom<u16> for ControlPacketType {
 
 pub enum ControlSubType {}
 
-#[derive(Clone, Debug, Default)]
-pub struct HandshakePacket {
-    header: Header,
-    /// A base protocol version number.  Currently used
-    /// values are 4 and 5.  Values greater than 5 are reserved for future
-    /// use.
-    version: u32,
-    /// Block cipher family and key size.  The
-    /// values of this field are described in Table 2.  The default value
-    /// is AES-128.
-    encryption_field: u16,
-    /// This field is message specific extension
-    /// related to Handshake Type field.  The value MUST be set to 0
-    /// except for the following cases.  (1) If the handshake control
-    /// packet is the INDUCTION message, this field is sent back by the
-    /// Listener. (2) In the case of a CONCLUSION message, this field
-    /// value should contain a combination of Extension Type values.  For
-    /// more details, see Section 4.3.1.
-    extension_field: ExtensionField,
-    /// The sequence number of the very first data packet to be sent.
-    initial_packet_sequence_number: u32,
-    /// This value is typically set
-    /// to 1500, which is the default Maximum Transmission Unit (MTU) size
-    /// for Ethernet, but can be less.
-    maximum_transmission_unit_size: u32,
-    /// The value of this field is the
-    /// maximum number of data packets allowed to be "in flight" (i.e. the
-    /// number of sent packets for which an ACK control packet has not yet
-    /// been received).
-    maximum_flow_window_size: u32,
-    /// This field indicates the handshake packet
-    /// type.  The possible values are described in Table 4.  For more
-    /// details refer to Section 4.3.
-    handshake_type: HandshakeType,
-    /// This field holds the ID of the source SRT
-    /// socket from which a handshake packet is issued.
-    srt_socket_id: u32,
-    /// Randomized value for processing a handshake.
-    /// The value of this field is specified by the handshake message
-    /// type.  See Section 4.3.
-    syn_cookie: u32,
-    /// IPv4 or IPv6 address of the packet's
-    /// sender.  The value consists of four 32-bit fields.  In the case of
-    /// IPv4 addresses, fields 2, 3 and 4 are filled with zeroes.
-    peer_ip_address: u128,
-    extensions: Extensions,
+/// The `EncryptionField` defines advertised block cipher family and key size.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct EncryptionField(u16);
+
+impl EncryptionField {
+    /// No encryption
+    const NONE: Self = Self(0);
+    /// AES-128
+    const AES128: Self = Self(1);
+    /// AES-192
+    const AES192: Self = Self(2);
+    /// AES-256
+    const AES256: Self = Self(4);
+
+    pub const fn from_u16(n: u16) -> Option<Self> {
+        match Self(n) {
+            Self::NONE => Some(Self::NONE),
+            Self::AES128 => Some(Self::AES128),
+            Self::AES192 => Some(Self::AES192),
+            Self::AES256 => Some(Self::AES256),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn to_u16(self) -> u16 {
+        self.0
+    }
 }
 
-impl HandshakePacket {
-    fn encode_body<W>(&self, mut writer: W) -> Result<(), Error>
+impl Encode for EncryptionField {
+    type Error = Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
-        self.version.encode(&mut writer)?;
-        self.encryption_field.encode(&mut writer)?;
-        self.extension_field.encode(&mut writer)?;
-        self.initial_packet_sequence_number.encode(&mut writer)?;
-        self.maximum_transmission_unit_size.encode(&mut writer)?;
-        self.maximum_flow_window_size.encode(&mut writer)?;
-        self.handshake_type.encode(&mut writer)?;
-        self.srt_socket_id.encode(&mut writer)?;
-        self.syn_cookie.encode(&mut writer)?;
-        self.peer_ip_address.encode(&mut writer)?;
-        self.extensions.encode(writer)?;
-
+        self.to_u16().encode(writer)?;
         Ok(())
     }
+}
 
-    fn decode_body<B>(mut bytes: B) -> Result<Self, Error>
+impl Decode for EncryptionField {
+    type Error = Error;
+
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
-        let version = u32::decode(&mut bytes)?;
-        let encryption_field = u16::decode(&mut bytes)?;
-        let extension_field = ExtensionField::decode(&mut bytes)?;
-        let initial_packet_sequence_number = u32::decode(&mut bytes)?;
-        let maximum_transmission_unit_size = u32::decode(&mut bytes)?;
-        let maximum_flow_window_size = u32::decode(&mut bytes)?;
-        let handshake_type = HandshakeType::decode(&mut bytes)?;
-        let srt_socket_id = u32::decode(&mut bytes)?;
-        let syn_cookie = u32::decode(&mut bytes)?;
-        let peer_ip_address = u128::decode(&mut bytes)?;
-        let extensions = Extensions::decode(&mut bytes)?;
+        let n = u16::decode(bytes)?;
 
-        Ok(Self {
-            header: Header::default(),
-            version,
-            encryption_field,
-            extension_field,
-            initial_packet_sequence_number,
-            maximum_transmission_unit_size,
-            maximum_flow_window_size,
-            handshake_type,
-            srt_socket_id,
-            syn_cookie,
-            peer_ip_address,
-            extensions,
-        })
-    }
-}
-
-impl IsPacket for HandshakePacket {
-    type Error = Error;
-
-    fn upcast(self) -> Packet {
-        let mut body = Vec::new();
-        self.encode_body(&mut body).unwrap();
-
-        Packet {
-            header: self.header,
-            body: body.into(),
+        match Self::from_u16(n) {
+            Some(this) => Ok(this),
+            None => Err(Error::InvalidEncryptionField(n)),
         }
     }
-
-    fn downcast(mut packet: Packet) -> Result<Self, Self::Error> {
-        let header = packet.header.as_control()?;
-        if header.control_type() != ControlPacketType::Handshake {
-            return Err(Error::InvalidControlType(header.control_type().to_u16()));
-        }
-
-        let mut this = Self::decode_body(&packet.body[..])?;
-        this.header = packet.header;
-
-        Ok(this)
-    }
-}
-
-impl Encode for HandshakePacket {
-    type Error = Error;
-
-    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
-    where
-        W: Write,
-    {
-        self.header.encode(&mut writer)?;
-        self.version.encode(&mut writer)?;
-        self.encryption_field.encode(&mut writer)?;
-        self.extension_field.encode(&mut writer)?;
-        self.initial_packet_sequence_number.encode(&mut writer)?;
-        self.maximum_transmission_unit_size.encode(&mut writer)?;
-        self.maximum_flow_window_size.encode(&mut writer)?;
-        self.handshake_type.encode(&mut writer)?;
-        self.srt_socket_id.encode(&mut writer)?;
-        self.syn_cookie.encode(&mut writer)?;
-        self.peer_ip_address.encode(&mut writer)?;
-        self.extensions.encode(&mut writer)?;
-
-        Ok(())
-    }
-}
-
-pub enum EncryptionField {
-    None,
-    AES128,
-    AES192,
-    AES256,
 }
 
 // +============+================+
@@ -776,7 +702,7 @@ impl<'a> DataHeader<'a> {
             0b10 => PacketPosition::First,
             0b00 => PacketPosition::Middle,
             0b01 => PacketPosition::Last,
-            0b11 => PacketPosition::Full,
+            0b11 => PacketPosition::Solo,
             _ => unreachable!(),
         }
     }
@@ -786,7 +712,7 @@ impl<'a> DataHeader<'a> {
             PacketPosition::First => 0b10,
             PacketPosition::Middle => 0b00,
             PacketPosition::Last => 0b01,
-            PacketPosition::Full => 0b11,
+            PacketPosition::Solo => 0b11,
         };
 
         self.header.seg1.set_bits(0..2, val);
@@ -816,8 +742,9 @@ impl<'a> DataHeader<'a> {
         self.header.seg1.set_bits(5, n as u32);
     }
 
-    pub fn message_number(&self) -> u32 {
-        self.header.seg1.bits(6..32).0
+    pub fn message_number(&self) -> MessageNumber {
+        let bits = self.header.seg1.bits(6..32).0;
+        unsafe { MessageNumber::new_unchecked(bits) }
     }
 
     pub fn set_message_number(&mut self, n: u32) {
@@ -825,7 +752,7 @@ impl<'a> DataHeader<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PacketPosition {
     /// The packet is the first packet of the data stream.
     First,
@@ -834,7 +761,8 @@ pub enum PacketPosition {
     /// The packet is the last packet of the data stream.
     Last,
     /// The packet contains a full data stream.
-    Full,
+    #[default]
+    Solo,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -966,7 +894,7 @@ impl Encode for Extensions {
 impl Decode for Extensions {
     type Error = Error;
 
-    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
@@ -1102,7 +1030,7 @@ impl Encode for HandshakeExtension {
 impl Decode for HandshakeExtension {
     type Error = Error;
 
-    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
@@ -1216,6 +1144,26 @@ impl HandshakeExtensionFlags {
     // TODO: FILTER ONLY VALID BITS
     pub const fn from_u32(n: u32) -> Option<Self> {
         Some(Self(n))
+    }
+
+    /// Returns `true` if the `CRYPT` flag is set.
+    #[inline]
+    pub const fn has_crypt(self) -> bool {
+        self.0 & Self::CRYPT.0 != 0
+    }
+
+    /// Returns `true` if the `REXMITFLG` flag is set.
+    #[inline]
+    pub const fn has_rexmitflg(self) -> bool {
+        self.0 & Self::REXMITFLG.0 != 0
+    }
+
+    /// Returns `true` if the [`STREAM`] flag is set.
+    ///
+    /// `STREAM`: Self::STREAM
+    #[inline]
+    pub const fn has_stream(self) -> bool {
+        self.0 & Self::STREAM.0 != 0
     }
 }
 
@@ -1564,12 +1512,14 @@ mod tests {
 
     #[test]
     fn test_streamid_extension() {
-        let mut buf: &[u8] = &[
+        let buf = [
             0x3a, 0x3a, 0x21, 0x23, 0x65, 0x72, 0x3d, 0x6d, 0x73, 0x65, 0x75, 0x71, 0x3d, 0x72,
             0x2c, 0x74, 0x35, 0x33, 0x32, 0x31,
         ];
 
-        let ext = StreamIdExtension::decode(&mut buf).unwrap();
+        let mut slice = buf.as_slice();
+
+        let ext = StreamIdExtension::decode(&mut slice).unwrap();
         assert_eq!(ext.content, "#!::m=request,r=1235");
 
         assert_eq!(ext.encode_to_vec().unwrap(), buf);

@@ -1,15 +1,13 @@
 [package]
-name = "streamsync-macros"
+name = "streamsync-api"
 version = "0.1.0"
 edition = "2021"
 authors = ["MrGunflame <git@robbsrv.de>"]
 repository = "https://github.com/MrGunflame/streamsync"
 license = "Apache-2.0"
 
-[lib]
-proc-macro = true
-
 [dependencies]
-proc-macro2 = "1.0.47"
-quote = "1.0.21"
-syn = "1.0.103"
+reqwest = { version = "0.11.13", features = ["json"] }
+serde = { version = "1.0.150", features = ["derive"] }
+serde_json = "1.0.89"
+thiserror = "1.0.37"

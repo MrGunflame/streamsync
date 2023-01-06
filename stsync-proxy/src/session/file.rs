@@ -6,7 +6,6 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::{io, Sink, Stream};
 use snowflaked::sync::Generator;
-use tokio::time::Interval;
 
 use super::{Error, LiveSink, LiveStream, ResourceId, SessionId, SessionManager};
 

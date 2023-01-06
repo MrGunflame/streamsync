@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+</head>
+
+<body>
+    <script>
+        function submit() {
+            let base = document.getElementById("in-base").value;
+            let sid = document.getElementById("in-sid").value;
+            let token = document.getElementById("in-token").value;
+
+            fetch(base + "/v1/streams/" + sid + "/sessions", {
+                method: "POST",
+                headers: {
+                    "Authorization": "Bearer " + token,
+                }
+            })
+                .then((resp) => resp.json())
+                .then((resp) => {
+                    let rid = document.getElementsByClassName("out-rid");
+                    let sid = document.getElementsByClassName("out-sid");
+                    document.getElementById("out-error").innerHTML = "";
+
+                    for (i = 0; i < rid.length; i++) {
+                        rid[i].innerHTML = resp.resource_id;
+                    }
+
+                    for (i = 0; i < sid.length; i++) {
+                        sid[i].innerHTML = resp.session_id;
+                    }
+                }).catch((err) => {
+                    document.getElementById("out-error").innerHTML = err;
+                });
+        }
+    </script>
+
+    <span>API base (with scheme, without trailing slash):</span>
+    <input id="in-base" />
+    <br>
+
+    <span>Stream Id:</span>
+    <input id="in-sid" />
+    <br>
+
+    <span>Token:</span>
+    <input type="password" id="in-token" />
+    <br>
+
+    <button onclick="submit()">OK</button>
+
+    <span>Resource Id:</span>
+    <span class="out-rid"></span>
+    <br>
+
+    <span>Session Id:</span>
+    <span class="out-sid"></span>
+    <br>
+
+    <span id="out-error"></span>
+    <br>
+
+    <span>
+        <span>OBS</span>
+        <code>srt://127.0.0.1:9999?streamid=#!::m=publish,r=<span class="out-rid"></span>,s=<span class="out-sid"></span></code>
+    </span>
+    <br>
+
+    <div>
+        <span>FFmpeg</span>
+        <code>ffmpeg -re -i test.ts -acodec copy -vcodec copy -f mpegts 'srt://127.0.0.1:9999?streamid=#!::m=publish,r=<span class="out-rid"></span>,s=<span class="out-sid"></span>'</code>
+    </div>
+    <br>
+
+    <div>
+        <span>FFplay</span>
+        <code>ffplay -fast -strict experimental -fflags nobuffer -flags low_delay 'srt://127.0.0.1:9999?streamid=#!::m=request,r=<span class="out-rid"></span>,s=<span class="out-sid"></span>'</code>
+    </div>
+
+</body>
+
+</html>

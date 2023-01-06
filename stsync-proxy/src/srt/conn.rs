@@ -8,22 +8,20 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use futures::sink::{Close, Feed};
 use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{event, span, Level, Span};
 
-use crate::proto::Encode;
 use crate::session::{LiveStream, SessionManager};
+use crate::signal::ShutdownListener;
 use crate::srt::proto::Nak;
-use crate::srt::{HandshakeType, VERSION};
+use crate::srt::{EncryptionField, HandshakeType, VERSION};
 use crate::utils::Shared;
 
 use super::metrics::ConnectionMetrics;
-use super::proto::{Ack, AckAck, DropRequest, Keepalive, Shutdown};
+use super::proto::{Ack, AckAck, DropRequest, Handshake, Keepalive, Shutdown, Timestamp};
 use super::sink::OutputSink;
 use super::socket::SrtSocket;
 use super::state::{ConnectionId, State};
@@ -31,7 +29,7 @@ use super::stream::SrtStream;
 use super::utils::Sequence;
 use super::{
     ControlPacketType, DataPacket, Error, ExtensionField, ExtensionType, HandshakeExtension,
-    HandshakePacket, IsPacket, Packet, PacketPosition, PacketType,
+    IsPacket, Packet, PacketType,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -50,13 +48,16 @@ where
 {
     pub id: ConnectionId,
     state: Shared<State<S>>,
-    metrics: Arc<ConnectionMetrics>,
+    pub metrics: Arc<ConnectionMetrics>,
 
     incoming: mpsc::Receiver<Packet>,
     socket: Shared<SrtSocket>,
 
     /// Time of the first sent packet.
     start_time: Instant,
+    /// Whether the timestamp is currently in a wrapping period. Once the timestamp wraps around,
+    /// it should reset `start_time`.
+    timestamp_is_wrapping: bool,
 
     server_sequence_number: Sequence,
     client_sequence_number: Sequence,
@@ -88,7 +89,9 @@ where
     /// the bigger value of the proposed values of both sides.
     ///
     /// The value is in milliseconds, not in microseconds.
-    latency: u16,
+    latency: Duration,
+
+    shutdown: Pin<Box<ShutdownListener>>,
 }
 
 impl<S> Connection<S>
@@ -127,6 +130,7 @@ where
             rtt: Rtt::new(),
             tick_interval: TickInterval::new(),
             start_time: Instant::now(),
+            timestamp_is_wrapping: false,
             socket: socket.into(),
             last_time: Instant::now(),
             poll_state: PollState::default(),
@@ -137,7 +141,8 @@ where
             server_sequence_number: Sequence::new(seqnum),
             client_sequence_number: Sequence::new(seqnum),
             loss_list: LossList::new(),
-            latency: 0,
+            latency: Duration::ZERO,
+            shutdown: Box::pin(ShutdownListener::new()),
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -153,8 +158,35 @@ where
         unsafe { self.state.as_ref() }
     }
 
-    fn timestamp(&self) -> u32 {
-        self.start_time.elapsed().as_micros() as u32
+    #[inline]
+    fn timestamp(&mut self) -> Timestamp {
+        let timestamp = Timestamp::from_micros(self.start_time.elapsed().as_micros() as u32);
+
+        // End of timestamp wrapping period.
+        if self.timestamp_is_wrapping && !timestamp.is_wrapping() {
+            event!(parent: &self.resource_span, Level::DEBUG, "left TS wrapping period");
+
+            self.start_time = Instant::now();
+            self.timestamp_is_wrapping = false;
+
+            match &mut self.mode {
+                ConnectionMode::Publish(sink) => sink.update_start(self.start_time),
+                ConnectionMode::Request { stream } => stream.update_start(self.start_time),
+                _ => (),
+            }
+        }
+
+        // Starting a timestamp wrapping period.
+        if timestamp.is_wrapping() {
+            // For logging only triggred on first wrapping event.
+            if !self.timestamp_is_wrapping {
+                event!(parent: &self.resource_span, Level::DEBUG, "entered TS wrapping period");
+            }
+
+            self.timestamp_is_wrapping = true;
+        }
+
+        timestamp
     }
 
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
@@ -212,33 +244,24 @@ where
             Poll::Pending => (),
         }
 
-        let timestamp = self.timestamp();
         let this = unsafe { self.get_unchecked_mut() };
 
-        if let ConnectionMode::Request {
-            stream,
-            message_number,
-        } = &mut this.mode
-        {
+        if let ConnectionMode::Request { stream } = &mut this.mode {
             let mut count = 0;
             while let Poll::Ready(res) = stream.poll_next_unpin(cx) {
                 match res {
-                    Some(buf) => {
-                        let mut packet = DataPacket::default();
-                        packet.header.set_packet_type(PacketType::Data);
-                        packet
-                            .header()
-                            .set_packet_sequence_number(this.server_sequence_number.to_u32());
-                        packet.header().set_message_number(*message_number);
-                        packet.header().set_ordered(true);
-                        packet.header().set_packet_position(PacketPosition::Full);
-                        packet.data = buf.into();
+                    Some((buf, ts, msgnum)) => {
+                        let packet = DataPacket::builder()
+                            .sequence_number(this.server_sequence_number)
+                            .message_number(msgnum)
+                            .ordered(true)
+                            .body(buf)
+                            .build();
 
                         this.server_sequence_number += 1;
-                        *message_number += 1;
 
                         let mut packet = packet.upcast();
-                        packet.header.timestamp = timestamp;
+                        packet.header.timestamp = ts;
                         packet.header.destination_socket_id = this.id.client_socket_id.0;
 
                         this.queue.push(packet);
@@ -419,10 +442,9 @@ where
                         tracing::warn!("Unhandled DropReq");
                         Ok(())
                     }
-                    ControlPacketType::PeerError => {
-                        tracing::warn!("Unhandled PeerError");
-                        Ok(())
-                    }
+                    // The peer error packet is only used for file transmission congestion
+                    // control and not used for live streams.
+                    ControlPacketType::PeerError => Ok(()),
                     ControlPacketType::UserDefined => Ok(()),
                 }
             }
@@ -430,6 +452,11 @@ where
     }
 
     fn tick(&mut self) -> Result<()> {
+        // Server initiated shutdown.
+        if self.shutdown.in_progress() {
+            return self.close();
+        }
+
         // Drop the connection after 15s of no response from the peer.
         if self.last_time.elapsed() >= Duration::from_secs(15) {
             return self.close();
@@ -456,12 +483,17 @@ where
                 bytes_recv_rate = self.metrics.data_bytes_recv.get() as u32 / timespan;
             }
 
+            let sink = match &self.mode {
+                ConnectionMode::Publish(sink) => sink,
+                _ => unreachable!(),
+            };
+
             let packet = Ack::builder()
-                .acknowledgement_number(self.server_sequence_number.to_u32())
-                .last_acknowledged_packet_sequence_number(self.client_sequence_number.to_u32())
+                .acknowledgement_number(self.server_sequence_number.get())
+                .last_acknowledged_packet_sequence_number(self.client_sequence_number.get())
                 .rtt(self.rtt.rtt)
                 .rtt_variance(self.rtt.rtt_variance)
-                .avaliable_buffer_size(8192)
+                .avaliable_buffer_size(sink.buffer_left() as u32)
                 .packets_receiving_rate(packets_recv_rate)
                 .estimated_link_capacity(packets_recv_rate)
                 .receiving_rate(bytes_recv_rate)
@@ -475,31 +507,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn send_bytes(&mut self, bytes: Bytes) -> Result<()> {
-        let message_number = match &mut self.mode {
-            ConnectionMode::Request {
-                stream: _,
-                message_number,
-            } => message_number,
-            _ => return Ok(()),
-        };
-
-        let mut packet = DataPacket::default();
-        packet.header.set_packet_type(PacketType::Data);
-        packet
-            .header()
-            .set_packet_sequence_number(self.server_sequence_number.to_u32());
-        packet.header().set_message_number(*message_number);
-        packet.header().set_ordered(true);
-        packet.header().set_packet_position(PacketPosition::Full);
-        packet.data = bytes.into();
-
-        self.server_sequence_number += 1;
-        *message_number += 1;
-
-        self.send(packet)
     }
 
     /// Sends a packet to the peer.
@@ -543,8 +550,6 @@ where
             self.poll_state = PollState::Closed;
         }
 
-        close_metrics(self);
-
         Ok(())
     }
 
@@ -578,18 +583,17 @@ where
             );
 
             self.loss_list
-                .extend(self.client_sequence_number.to_u32()..seqnum.to_u32());
+                .extend(self.client_sequence_number.get()..seqnum.get());
 
             // We attempt to recover the lost packet only if we can expect it to arrive
             // before we would have already consumed it. If we cannot receive the lost
             // packet in time we ignore it.
-            if self.rtt.is_reachable(self.latency as u32 * 1000) {
+            if self.rtt.is_reachable(self.latency) {
                 // We attempt to recover the lost packet by sending NAK right away. We don't
                 // actually validate that it reaches its destination. If it gets lost we simply
                 // skip the packet.
-                let builder = Nak::builder().lost_packet_sequence_numbers(
-                    self.client_sequence_number.to_u32()..seqnum.to_u32(),
-                );
+                let builder = Nak::builder()
+                    .lost_packet_sequence_numbers(self.client_sequence_number.get()..seqnum.get());
 
                 self.send_prio(builder.build())?;
             }
@@ -656,7 +660,7 @@ where
         }
     }
 
-    fn handle_handshake(&mut self, mut packet: HandshakePacket) -> Result<()> {
+    fn handle_handshake(&mut self, mut packet: Handshake) -> Result<()> {
         tracing::trace!("Connection.handle_handshake");
 
         let syn_cookie = match self.mode {
@@ -679,10 +683,11 @@ where
             return Ok(());
         }
 
-        if packet.encryption_field != 0 {
+        if packet.encryption_field != EncryptionField::NONE {
             tracing::debug!(
-                "Missmatched encryption_field {} in HS (expected 0), rejecting",
-                packet.encryption_field
+                "Missmatched encryption_field {:?} in HS (expected {:?}), rejecting",
+                packet.encryption_field,
+                EncryptionField::NONE,
             );
             return Ok(());
         }
@@ -699,13 +704,36 @@ where
 
         packet.syn_cookie = 0;
         packet.srt_socket_id = self.id.server_socket_id.0;
-        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
+        packet.initial_packet_sequence_number = self.server_sequence_number.get();
+
+        // The HSREQ extension is required for TSBD.
+        // The CONFIG extension is required for stream authentication.
+        if !packet.extension_field.hsreq() || !packet.extension_field.config() {
+            return self.reject(HandshakeType::REJ_ROGUE);
+        }
 
         // Handle handshake extensions.
         if let Some(mut ext) = packet.extensions.remove_hsreq() {
-            ext.sender_tsbpd_delay = ext.receiver_tsbpd_delay;
+            // The CRYPT and REXMITFLG flags must always be set.
+            if !ext.srt_flags.has_crypt() || !ext.srt_flags.has_rexmitflg() {
+                return self.reject(HandshakeType::REJ_ROGUE);
+            }
 
-            self.latency = ext.sender_tsbpd_delay;
+            // The STREAM flag enables buffer mode and must not be set as this server
+            // will only ever serve live streams.
+            if ext.srt_flags.has_stream() {
+                return self.reject(HandshakeType::REJ_ROGUE);
+            }
+
+            // The recommended delay is 4*RTT, making this a suitable value for
+            // networks with up to 250ms delay.
+            // Also see https://github.com/Haivision/srt/issues/1630#issuecomment-719384626
+            ext.sender_tsbpd_delay = self.state().config.latency;
+            ext.receiver_tsbpd_delay = self.state().config.latency;
+
+            self.latency = Duration::from_millis(ext.sender_tsbpd_delay as u64);
+
+            tracing::debug!("Agreed on stream latency of {:?}", self.latency);
 
             packet.extensions.0.push(HandshakeExtension {
                 extension_type: ExtensionType::HSRSP,
@@ -715,6 +743,7 @@ where
 
             packet.extension_field = ExtensionField::HSREQ;
         } else {
+            tracing::debug!("rejecting due to missing HSREQ extension");
             return self.reject(HandshakeType::REJ_ROGUE);
         }
 
@@ -760,15 +789,17 @@ where
                         }
                     };
 
-                    let stream = SrtStream::new(stream, 8192, self.client_sequence_number);
+                    let stream = SrtStream::new(
+                        stream,
+                        self.state().config.buffer as usize,
+                        self.client_sequence_number,
+                        self.start_time,
+                    );
 
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_request_current.inc();
 
-                    self.mode = ConnectionMode::Request {
-                        stream,
-                        message_number: 1,
-                    };
+                    self.mode = ConnectionMode::Request { stream };
                 }
                 Some("publish") => {
                     tracing::info!(
@@ -799,11 +830,20 @@ where
                     self.state().metrics.connections_handshake_current.dec();
                     self.state().metrics.connections_publish_current.inc();
 
-                    self.mode = ConnectionMode::Publish(OutputSink::new(sink));
+                    self.mode = ConnectionMode::Publish(OutputSink::new(
+                        sink,
+                        self.start_time,
+                        self.latency,
+                        self.state().config.buffer as usize,
+                    ));
                 }
-                _ => return self.reject(HandshakeType::REJ_ROGUE),
+                _ => {
+                    tracing::debug!("rejecting due to invalid STREAMID::mode");
+                    return self.reject(HandshakeType::REJ_ROGUE);
+                }
             }
         } else {
+            tracing::debug!("rejecting due to missing STREAMID extension");
             return self.reject(HandshakeType::REJ_ROGUE);
         }
 
@@ -814,12 +854,12 @@ where
     fn reject(&mut self, reason: HandshakeType) -> Result<()> {
         event!(parent: &self.resource_span, Level::DEBUG, "Rejecting client {} with reason {:?}", self.id, reason);
 
-        let mut packet = HandshakePacket::default();
+        let mut packet = Handshake::default();
         packet.header.set_packet_type(PacketType::Control);
         packet.version = VERSION;
-        packet.encryption_field = 0;
+        packet.encryption_field = EncryptionField::NONE;
         packet.extension_field = ExtensionField::NONE;
-        packet.initial_packet_sequence_number = self.server_sequence_number.to_u32();
+        packet.initial_packet_sequence_number = self.server_sequence_number.get();
         packet.maximum_transmission_unit_size = self.mtu as u32;
         packet.maximum_flow_window_size = 8192;
         packet.handshake_type = reason;
@@ -843,24 +883,26 @@ where
         };
 
         for seq in packet.lost_packet_sequence_numbers.iter() {
-            match stream.get(seq.into()).cloned() {
-                Some(buf) => {
-                    // TODO: Keep track of message numbers.
-                    let mut packet = DataPacket::default();
-                    packet.header().set_packet_sequence_number(seq);
-                    packet.header().set_ordered(true);
-                    packet.header().set_retransmitted(true);
-                    packet.header().set_packet_position(PacketPosition::Full);
-                    packet.data = buf;
+            match stream.get(seq.into()) {
+                Some((buf, ts, msgnum)) => {
+                    let packet = DataPacket::builder()
+                        .sequence_number(seq)
+                        .message_number(msgnum)
+                        .ordered(true)
+                        .retransmitted(true)
+                        .body(buf.clone())
+                        .build();
 
                     let mut packet = packet.upcast();
-                    packet.header.timestamp = timestamp;
+                    packet.header.timestamp = ts;
                     packet.header.destination_socket_id = self.id.client_socket_id.0;
 
                     self.queue.push_prio(packet);
                 }
                 None => {
                     let dropreq = DropRequest::builder()
+                        // Message number of zero indicates we don't know the actual
+                        // message number anymore.
                         .message_number(0)
                         .first_packet_sequence_number(packet.lost_packet_sequence_numbers.first())
                         .last_packet_sequence_number(packet.lost_packet_sequence_numbers.last())
@@ -879,10 +921,6 @@ where
     }
 
     fn handle_dropreq(&mut self, _packet: DropRequest) -> Result<()> {
-        Ok(())
-    }
-
-    fn handle_peer_error(&mut self, _packet: Packet) -> Result<()> {
         Ok(())
     }
 }
@@ -1170,7 +1208,6 @@ where
     Publish(OutputSink<S>),
     Request {
         stream: SrtStream<LiveStream<S::Stream>>,
-        message_number: u32,
     },
 }
 
@@ -1212,8 +1249,8 @@ impl Rtt {
     /// Returns `true` if the peer with the current `Rtt` is expected to be reachable in the
     /// time `n`. `n` is specified in microseconds.
     #[inline]
-    pub const fn is_reachable(&self, n: u32) -> bool {
-        self.rtt < n
+    pub const fn is_reachable(&self, n: Duration) -> bool {
+        self.rtt < n.as_micros() as u32
     }
 }
 
@@ -1292,9 +1329,9 @@ impl TransmissionQueue {
     }
 
     pub fn pop(&mut self) -> Option<Packet> {
-        match self.prio.remove(0) {
+        match self.prio.pop_front() {
             Some(packet) => Some(packet),
-            None => self.queue.remove(0),
+            None => self.queue.pop_front(),
         }
     }
 

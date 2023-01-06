@@ -5,12 +5,14 @@
 //! See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-4.3
 
 use super::conn::Connection;
+use super::proto::Handshake;
 use super::server::SrtStream;
 use super::state::{ConnectionId, State};
 use super::IsPacket;
-use super::{Error, HandshakePacket, HandshakeType, PacketType};
+use super::{Error, HandshakeType};
 use crate::session::SessionManager;
-use crate::srt::ExtensionField;
+use crate::srt::proto::Timestamp;
+use crate::srt::{EncryptionField, ExtensionField};
 
 /// Only continue if lhs == rhs, otherwise return from the current function.
 macro_rules! srt_assert {
@@ -24,7 +26,7 @@ macro_rules! srt_assert {
 }
 
 pub async fn handshake<S>(
-    packet: HandshakePacket,
+    packet: Handshake,
     stream: SrtStream<'_>,
     state: &State<S>,
 ) -> Result<(), Error>
@@ -42,7 +44,7 @@ where
 }
 
 async fn handshake_induction<S>(
-    packet: HandshakePacket,
+    packet: Handshake,
     stream: SrtStream<'_>,
     state: &State<S>,
 ) -> Result<(), Error>
@@ -53,7 +55,7 @@ where
     debug_assert!(packet.handshake_type.is_induction());
 
     srt_assert!(packet.version, 4);
-    srt_assert!(packet.encryption_field, 0);
+    srt_assert!(packet.encryption_field, EncryptionField::NONE);
     srt_assert!(packet.extension_field, ExtensionField::INDUCTION);
     srt_assert!(packet.syn_cookie, 0);
 
@@ -65,9 +67,8 @@ where
 
     let syn_cookie = state.random();
 
-    let mut resp = HandshakePacket::default();
-    resp.header.set_packet_type(PacketType::Control);
-    resp.header.timestamp = 0;
+    let mut resp = Handshake::default();
+    resp.header.timestamp = Timestamp::default();
     resp.header.destination_socket_id = client_socket_id;
 
     resp.handshake_type = HandshakeType::INDUCTION;
@@ -107,7 +108,7 @@ where
 }
 
 async fn handshake_conclusion<S>(
-    packet: HandshakePacket,
+    packet: Handshake,
     stream: SrtStream<'_>,
     state: &State<S>,
 ) -> Result<(), Error>
@@ -118,7 +119,7 @@ where
     debug_assert!(packet.handshake_type.is_conclusion());
 
     srt_assert!(packet.version, 5);
-    srt_assert!(packet.encryption_field, 0);
+    srt_assert!(packet.encryption_field, EncryptionField::NONE);
 
     let conn = match state.pool.find_client_id(stream.addr, packet.srt_socket_id) {
         Some(conn) => conn,

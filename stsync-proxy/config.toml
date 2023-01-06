@@ -1,0 +1,46 @@
+# Auto
+# threads = 32
+
+[srt]
+# Whether the SRT server should be enabled.
+#
+# Default value: true
+enabled = true
+
+# The address:port the SRT server should bind to.
+#
+# Default value: "0.0.0.0:9999"
+bind = "0.0.0.0:9999"
+
+# Auto
+# workers = 32
+
+# UDP socket send and receive buffer sizes. A value of 0 indicates the system default.
+# Corresponds to `SO_SNDBUF` and `SO_RCVBUF` on linux.
+rcvbuf = 500_000
+sndbuf = 0
+
+mtu = 1500
+flow-window = 8192
+
+# Number of segment buffers for receiving/sending streams. For sending streams this defines
+# the number segments in the backlog after transmitting for the first time. For receiving
+# streams this defines the number of segments buffered due to TSBPD.
+# 
+# Default value: 8192
+buffer = 8192
+
+# SRT TSBPD tx/rx peer latency in milliseconds.
+# Recommended to be at least 4 * RTT.
+latency = 1000
+
+[http]
+# Whether the HTTP server should be enabled.
+#
+# Default value: true
+enabled = true
+
+# The address:port the HTTP server should bind to.
+#
+# Default value: "0.0.0.0:9998"
+bind = "0.0.0.0:9998"

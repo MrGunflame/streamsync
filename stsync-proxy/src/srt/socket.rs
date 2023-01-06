@@ -9,19 +9,22 @@ use crate::proto::Encode;
 
 use super::IsPacket;
 
+/// A wrapper around a UDP socket designed to receive SRT frames.
 #[derive(Debug)]
 pub struct SrtSocket {
     socket: UdpSocket,
 }
 
 impl SrtSocket {
+    /// Creates a new `SrtSocket` bound to the given `addr`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] when creating or configuring the socket fails.
+    ///
+    /// [`Error`]: std::io::Error
     pub fn new(addr: SocketAddr) -> Result<Self> {
-        let domain = match addr {
-            SocketAddr::V4(_) => Domain::IPV4,
-            SocketAddr::V6(_) => Domain::IPV6,
-        };
-
-        let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
+        let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
         socket.set_nonblocking(true)?;
         socket.bind(&addr.into())?;
         socket.set_recv_buffer_size(500_000_000)?;
@@ -31,10 +34,19 @@ impl SrtSocket {
         Ok(Self { socket })
     }
 
+    /// Receives a single datagram from the `SrtSocket` into the `buf`. Returns the number of bytes
+    /// received and the [`SocketAddr`] of the remote peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if receiving a datagram fails.
+    ///
+    /// [`Error`]: std::io::Error
     pub async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
         self.socket.recv_from(buf).await
     }
 
+    /// Sends a SRT packet to a remote peer.
     pub async fn send_to<T>(
         &self,
         packet: T,
@@ -68,16 +80,19 @@ impl SrtSocket {
         }
     }
 
+    /// Returns the `SO_RCVBUF` value of the `SrtSocket`.
     #[inline]
     pub fn recv_buffer_size(&self) -> Result<usize> {
         self.as_socket().recv_buffer_size()
     }
 
+    /// Returns the `SO_SNDBUF` value of the `SrtSocket`.
     #[inline]
     pub fn send_buffer_size(&self) -> Result<usize> {
         self.as_socket().send_buffer_size()
     }
 
+    /// Returns the [`SocketAddr`] which the `SrtSocket` has been bound to.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.socket.local_addr()

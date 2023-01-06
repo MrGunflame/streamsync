@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::{Sink, Stream};
+use serde::{Deserialize, Serialize};
 use snowflaked::Snowflake;
 use thiserror::Error;
 
@@ -32,16 +33,23 @@ impl Error {
     }
 }
 
+/// A producer and consumer for transport streams.
+///
+/// A `SessionManager` is the interface that transport streams will use to request and publish
+/// streams. A `SessionManager` is designed to be shareable between different stream
+/// implementations.
 pub trait SessionManager: Send + Sync + 'static {
     type Sink: Sink<Bytes> + Send + Sync + Unpin + 'static;
     type Stream: Stream<Item = Bytes> + Send + Sync + Unpin + 'static;
 
+    /// Requests a new [`LiveSink`] to the stream with the given `resource_id`.
     fn publish(
         &self,
         resource_id: Option<ResourceId>,
         session_id: Option<SessionId>,
     ) -> Result<LiveSink<Self::Sink>, Error>;
 
+    /// Requests a new [`LiveStream`] of the stream with the given `resource_id`.
     fn request(
         &self,
         resource_id: Option<ResourceId>,
@@ -53,7 +61,7 @@ pub trait SessionManager: Send + Sync + 'static {
 ///
 /// A `ResourceId` is an arbitrary 64-bit number. When used in a string form it is lower hex
 /// encoded. It implements [`Display`] and [`FromStr`] accordingly.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct ResourceId(pub u64);
 
@@ -89,7 +97,7 @@ impl Snowflake for ResourceId {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionId(pub u64);
 
 impl Display for SessionId {

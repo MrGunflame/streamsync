@@ -31,13 +31,18 @@ impl<S> Server<S>
 where
     S: SessionManager,
 {
-    pub fn new(session_manager: S, config: Config) -> Result<Self, io::Error> {
-        let socket = SrtSocket::new("0.0.0.0:9999".parse().unwrap())?;
+    pub fn new<C>(session_manager: S, config: C) -> Result<Self, io::Error>
+    where
+        C: Into<Config>,
+    {
+        let config = config.into();
+
+        let socket = SrtSocket::new(config.bind)?;
 
         let rx = socket.recv_buffer_size()?;
         let tx = socket.send_buffer_size()?;
 
-        tracing::info!("Listening on {}", socket.local_addr()?);
+        tracing::info!("Srt socket listening on {}", socket.local_addr()?);
         tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
 
         let num_workers = config.workers.unwrap_or_else(|| {

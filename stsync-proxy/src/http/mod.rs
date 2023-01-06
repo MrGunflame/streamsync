@@ -1,17 +1,19 @@
-use std::fmt::Write;
+mod metrics;
+mod v1;
 
+use hyper::header::{
+    ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, AUTHORIZATION, ORIGIN,
+};
+use hyper::http::HeaderValue;
 use hyper::service::service_fn;
-use hyper::Body;
 use hyper::{server::conn::Http, Response};
+use hyper::{Body, Request};
 use tokio::net::TcpListener;
 
-use crate::session::SessionManager;
-use crate::srt::state::State;
+use crate::state::State;
 
-pub async fn serve<S>(state: State<S>)
-where
-    S: SessionManager,
-{
+pub async fn serve(state: State) {
     let socket = TcpListener::bind("0.0.0.0:9998").await.unwrap();
 
     loop {
@@ -20,15 +22,40 @@ where
         let state = state.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
-                let state = state.clone();
+                let origin = req.headers().get(ORIGIN).cloned();
+
+                let mut ctx = Context {
+                    state: state.clone(),
+                    path: Path::new(req.uri().path()),
+                    request: req,
+                };
+
                 async move {
-                    let resp = match req.uri().path() {
-                        "/v1/metrics" => metrics(&state).await,
+                    let mut resp = match ctx.path.take() {
+                        Some(path) if path == "v1" => v1::route(ctx).await,
+                        Some(path) if path == "metrics" => metrics::metrics(ctx).await,
                         _ => Response::builder()
                             .status(404)
                             .body(Body::from("Not Found"))
                             .unwrap(),
                     };
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_METHODS,
+                        HeaderValue::from_static("POST"),
+                    );
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_CREDENTIALS,
+                        HeaderValue::from_static("true"),
+                    );
+                    resp.headers_mut().append(
+                        ACCESS_CONTROL_ALLOW_HEADERS,
+                        HeaderValue::from_static("content-type, authorization"),
+                    );
+
+                    if let Some(origin) = origin {
+                        resp.headers_mut()
+                            .append(ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
+                    }
 
                     Ok::<_, hyper::Error>(resp)
                 }
@@ -41,135 +68,45 @@ where
     }
 }
 
-async fn metrics<S: SessionManager>(state: &State<S>) -> Response<Body> {
-    let mut string = String::new();
-    let guard = state.conn_metrics.lock();
-    let iter = guard.iter();
+struct Context {
+    pub request: Request<Body>,
+    path: Path,
+    state: State,
+}
 
-    writeln!(
-        string,
-        "srt_connections_total {}",
-        state.metrics.connections_total
-    )
-    .unwrap();
+impl Context {
+    pub fn authorization(&self) -> Option<&[u8]> {
+        match self.request.headers().get(AUTHORIZATION) {
+            Some(token) => token.as_bytes().strip_prefix(b"Bearer "),
+            None => None,
+        }
+    }
+}
 
-    for (mode, gauge) in [
-        ("handshake", &state.metrics.connections_handshake_current),
-        ("request", &state.metrics.connections_request_current),
-        ("publish", &state.metrics.connections_publish_current),
-    ] {
-        writeln!(
-            string,
-            "srt_connections_current{{mode=\"{}\"}} {}",
-            mode, gauge
-        )
-        .unwrap();
+struct Path {
+    buf: Vec<String>,
+}
+
+impl Path {
+    fn new<T>(path: T) -> Self
+    where
+        T: ToString,
+    {
+        let path = path.to_string();
+        let mut buf: Vec<String> = path.split('/').map(|s| s.to_owned()).collect();
+
+        if path.starts_with('/') {
+            buf.remove(0);
+        }
+
+        Self { buf }
     }
 
-    for (id, metrics) in iter {
-        let id = id.server_socket_id.0;
-
-        writeln!(
-            string,
-            "srt_connection_data_packets_sent{{id=\"{}\"}} {}",
-            id, metrics.data_packets_sent
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_bytes_sent{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_sent
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_packets_recv{{id=\"{}\"}} {}",
-            id, metrics.data_packets_recv
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_bytes_recv{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_recv
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_packets_lost{{id=\"{}\"}} {}",
-            id, metrics.data_packets_lost
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_bytes_lost{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_lost
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_packets_sent{{id=\"{}\"}} {}",
-            id, metrics.ctrl_packets_sent
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_bytes_sent{{id=\"{}\"}} {}",
-            id, metrics.ctrl_bytes_sent
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_packets_recv{{id=\"{}\"}} {}",
-            id, metrics.ctrl_packets_recv
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_bytes_recv{{id=\"{}\"}} {}",
-            id, metrics.ctrl_bytes_recv
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_packets_lost{{id=\"{}\"}} {}",
-            id, metrics.ctrl_packets_lost
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_ctrl_bytes_lost{{id=\"{}\"}} {}",
-            id, metrics.ctrl_bytes_lost
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_rtt{{id=\"{}\"}} {}",
-            id, metrics.rtt
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_rtt_variance{{id=\"{}\"}} {}",
-            id, metrics.rtt_variance
-        )
-        .unwrap();
+    pub fn take(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            None
+        } else {
+            Some(self.buf.remove(0))
+        }
     }
-
-    Response::builder()
-        .status(200)
-        .body(Body::from(string))
-        .unwrap()
 }

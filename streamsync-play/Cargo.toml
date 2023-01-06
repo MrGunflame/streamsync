@@ -1,15 +1,11 @@
 [package]
-name = "streamsync-macros"
+name = "streamsync-play"
 version = "0.1.0"
 edition = "2021"
 authors = ["MrGunflame <git@robbsrv.de>"]
 repository = "https://github.com/MrGunflame/streamsync"
 license = "Apache-2.0"
 
-[lib]
-proc-macro = true
-
 [dependencies]
-proc-macro2 = "1.0.47"
-quote = "1.0.21"
-syn = "1.0.103"
+streamsync-api = { version = "0.1.0", path = "../streamsync-api" }
+tokio = { version = "1.23.0", features = ["macros", "rt-multi-thread", "signal"] }

@@ -1,16 +1,21 @@
 //! SRT Output sink
-use std::collections::HashMap;
-use std::hint::unreachable_unchecked;
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
+use std::future::Future;
+use std::marker::PhantomPinned;
 use std::num::Wrapping;
 use std::pin::Pin;
 use std::task::{ready, Context, Poll};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures::Sink;
+use futures::{pin_mut, Sink};
 use pin_project::pin_project;
+use tokio::time::{sleep_until, Sleep};
 
 use crate::session::{LiveSink, SessionManager};
 
+use super::utils::{MessageNumber, Sequence};
 use super::DataPacket;
 
 /// A [`Sink`] that receives [`DataPacket`]s and converts them back into data.
@@ -26,9 +31,7 @@ where
 {
     /// Sequence number of the next expected segment.
     next_msgnum: Wrapping<u32>,
-    queue: BufferQueue,
-    skip_counter: u8,
-    poll_state: PollState,
+    queue: SegmentQueue,
     #[pin]
     sink: LiveSink<S::Sink>,
 }
@@ -38,77 +41,48 @@ where
     S: SessionManager,
 {
     /// Creates a new `OutputSink` using `sink` as the underlying [`Sink`].
-    pub fn new(sink: LiveSink<S::Sink>) -> Self {
+    pub fn new(
+        sink: LiveSink<S::Sink>,
+        start: Instant,
+        latency: Duration,
+        buffer_size: usize,
+    ) -> Self {
         Self {
             next_msgnum: Wrapping(1),
             sink,
-            queue: BufferQueue::new(),
-            skip_counter: 0,
-            poll_state: PollState::Ready,
+            queue: SegmentQueue::new(start, latency, buffer_size),
         }
     }
 
+    /// Update the starting [`Instant`] of the sink.
+    #[inline]
+    pub fn update_start(&mut self, instant: Instant) {
+        self.queue.start = instant;
+    }
+
+    /// Returns the remaining capacity in the output buffer.
+    #[inline]
+    pub fn buffer_left(&self) -> usize {
+        8192 - self.queue.len()
+    }
+
+    /// Write to output sink with latency.
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Result<(), <Self as Sink<DataPacket>>::Error>> {
-        #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::Write));
-
+    ) -> Poll<Result<(), <S::Sink as Sink<Bytes>>::Error>> {
         let mut this = self.project();
 
-        if let Err(err) = ready!(this.sink.as_mut().poll_ready(cx)) {
-            return Poll::Ready(Err(err));
+        ready!(this.sink.as_mut().poll_ready(cx))?;
+
+        let fut = this.queue.take();
+        pin_mut!(fut);
+        let segment = ready!(fut.poll(cx));
+
+        if let Some(segment) = segment {
+            this.sink.start_send(segment.payload)?;
         }
 
-        match this.queue.remove(this.next_msgnum.0) {
-            Some(buf) => {
-                this.sink.start_send(buf.into())?;
-                *this.next_msgnum += 1;
-
-                *this.poll_state = PollState::Write;
-            }
-            None => {
-                *this.poll_state = PollState::Ready;
-            }
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_skip_ahead(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Result<(), <Self as Sink<DataPacket>>::Error>> {
-        #[cfg(debug_assertions)]
-        assert!(matches!(self.poll_state, PollState::SkipAhead { .. }));
-
-        let target = match self.poll_state {
-            PollState::SkipAhead { target } => target,
-            _ => unsafe { unreachable_unchecked() },
-        };
-
-        let mut this = self.project();
-
-        if let Err(err) = ready!(this.sink.as_mut().poll_ready(cx)) {
-            return Poll::Ready(Err(err));
-        }
-
-        while this.next_msgnum.0 <= target {
-            if let Some(buf) = this.queue.remove(this.next_msgnum.0) {
-                if let Err(err) = this.sink.as_mut().start_send(buf.into()) {
-                    return Poll::Ready(Err(err));
-                }
-
-                return Poll::Ready(Ok(()));
-            }
-
-            *this.next_msgnum += 1;
-        }
-
-        // Catchup done
-        *this.skip_counter = 0;
-        *this.poll_state = PollState::Ready;
         Poll::Ready(Ok(()))
     }
 }
@@ -121,58 +95,27 @@ where
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         loop {
-            match self.poll_state {
-                PollState::Ready => return Poll::Ready(Ok(())),
-                PollState::Write => {
-                    ready!(self.as_mut().poll_write(cx))?;
-                }
-                PollState::SkipAhead { .. } => {
-                    ready!(self.as_mut().poll_skip_ahead(cx))?;
-                }
+            if self.queue.is_empty() || self.as_mut().poll_write(cx).is_pending() {
+                break;
             }
         }
+        // self.poll_write(cx);
+
+        // TODO: Implement a fixed buffer size.
+        Poll::Ready(Ok(()))
     }
 
     fn start_send(mut self: Pin<&mut Self>, packet: DataPacket) -> Result<(), Self::Error> {
-        let msgnum = packet.message_number();
-
-        if self.next_msgnum.0 > msgnum {
-            tracing::trace!("Segment {} received too late", msgnum);
-            return Ok(());
-        }
-
-        if self.next_msgnum.0 == msgnum {
-            self.skip_counter = self.skip_counter.saturating_sub(1);
-            self.next_msgnum += 1;
-
-            tracing::trace!("Segment {} is in order", msgnum);
-
-            let this = self.project();
-
-            this.sink.start_send(packet.data.into())?;
-
-            *this.poll_state = PollState::Write;
-        } else {
-            tracing::trace!(
-                "Segment {} is out of order (missing {})",
-                msgnum,
-                self.next_msgnum
-            );
-            self.skip_counter += 1;
-
-            self.queue.insert(msgnum, packet.data);
-
-            if self.skip_counter >= 40 {
-                tracing::trace!("Skip ahead (HEAD {} => {})", self.next_msgnum, msgnum);
-
-                self.poll_state = PollState::SkipAhead { target: msgnum };
-            }
-        }
-
+        self.queue.push(packet);
         Ok(())
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // Drain the queue.
+        while !self.queue.is_empty() {
+            ready!(self.as_mut().poll_write(cx))?;
+        }
+
         let this = self.project();
         this.sink.poll_flush(cx)
     }
@@ -189,52 +132,156 @@ where
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct BufferQueue {
-    inner: HashMap<u32, Bytes>,
+/// A queue of [`Segment`]s to be written.
+#[derive(Debug)]
+struct SegmentQueue {
+    queue: BTreeSet<Segment>,
     /// Total size of all buffers combined.
     size: usize,
+    start: Instant,
+    latency: Duration,
+    buffer_size: usize,
 }
 
-impl BufferQueue {
-    pub fn new() -> Self {
+impl SegmentQueue {
+    pub fn new(start: Instant, latency: Duration, buffer_size: usize) -> Self {
         Self {
-            inner: HashMap::new(),
+            queue: BTreeSet::new(),
             size: 0,
+            start,
+            latency,
+            buffer_size,
         }
     }
 
-    pub fn insert(&mut self, seq: u32, buf: Bytes) {
-        // We never store empty buffers.
-        if buf.len() != 0 {
-            self.size += buf.len();
-            self.inner.insert(seq, buf);
+    pub fn push(&mut self, mut packet: DataPacket) {
+        // Prevent memory exhaustion from slow receivers or attacks.
+        if self.len() > self.buffer_size {
+            return;
+        }
+
+        let sequence = Sequence::new(packet.packet_sequence_number());
+        let message_number = packet.message_number();
+        let delivery_time = self.start + packet.header.timestamp.to_duration() + self.latency;
+
+        self.size += packet.data.len();
+        self.queue.insert(Segment {
+            sequence,
+            message_number,
+            delivery_time,
+            payload: packet.data,
+        });
+    }
+
+    pub fn first(&mut self) -> Option<&'_ Segment> {
+        self.queue.first()
+    }
+
+    pub fn pop_first(&mut self) -> Option<Segment> {
+        let segment = self.queue.pop_first()?;
+        self.size -= segment.payload.len();
+        Some(segment)
+    }
+
+    /// Returns a future that completes once the next segment can be taken.
+    ///
+    /// **Note that the queue will only keep track of the most recent waker.**
+    pub fn take(&mut self) -> Take<'_> {
+        Take {
+            queue: self,
+            sleep: None,
+            _pin: PhantomPinned,
         }
     }
 
-    pub fn remove(&mut self, seq: u32) -> Option<Bytes> {
-        match self.inner.remove(&seq) {
-            Some(buf) => {
-                self.size -= buf.len();
-                Some(buf)
-            }
-            None => None,
-        }
+    pub fn len(&self) -> usize {
+        self.queue.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.size == 0
+        self.len() == 0
     }
 
     pub fn clear(&mut self) {
-        self.inner.clear();
+        self.queue.clear();
         self.size = 0;
     }
 }
 
-#[derive(Debug)]
-enum PollState {
-    Ready,
-    Write,
-    SkipAhead { target: u32 },
+#[derive(Clone, Debug)]
+struct Segment {
+    sequence: Sequence,
+    message_number: MessageNumber,
+    delivery_time: Instant,
+    payload: Bytes,
+}
+
+impl PartialEq for Segment {
+    fn eq(&self, other: &Self) -> bool {
+        self.message_number == other.message_number && self.delivery_time == other.delivery_time
+    }
+}
+
+impl Eq for Segment {}
+
+impl PartialOrd for Segment {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Segment {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.message_number.cmp(&other.message_number) {
+            Ordering::Less => Ordering::Less,
+            Ordering::Equal => self.delivery_time.cmp(&other.delivery_time),
+            Ordering::Greater => Ordering::Greater,
+        }
+    }
+}
+
+#[pin_project]
+struct Take<'a> {
+    queue: &'a mut SegmentQueue,
+    sleep: Option<Sleep>,
+    _pin: PhantomPinned,
+}
+
+impl<'a> Future for Take<'a> {
+    type Output = Option<Segment>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+
+        let now = Instant::now();
+
+        let deadline;
+        if let Some(seg) = this.queue.first() {
+            if seg.delivery_time <= now {
+                // FIXME: pop_first == None is unreachable.
+                return Poll::Ready(this.queue.pop_first());
+            } else {
+                deadline = seg.delivery_time;
+            }
+        } else {
+            // The queue is empty.
+            return Poll::Ready(None);
+        }
+
+        if this.sleep.is_none() {
+            let sleep = sleep_until(deadline.into());
+            *this.sleep = Some(sleep);
+        }
+
+        tracing::trace!("Ready in {:?}", deadline - now);
+
+        let sleep = this.sleep.as_mut().unwrap();
+        // SAFETY: `self` is `!Unpin`. It is never moved.
+        let sleep = unsafe { Pin::new_unchecked(sleep) };
+        ready!(sleep.poll(cx));
+
+        // Since we only ever store one waiter the segment is guaranteed to still be
+        // untouched when the timer expires.
+        Poll::Ready(this.queue.pop_first())
+    }
 }

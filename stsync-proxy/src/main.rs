@@ -1,41 +1,73 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+#![deny(unused_crate_dependencies)]
+
+// We only import log to remove trace and debug levels at compile time.
+use log as _;
 
 use clap::Parser;
-use session::{buffer::BufferSessionManager, file::FileSessionManager};
-use srt::{config::Config, server::Server};
+use config::Config;
+use session::buffer::BufferSessionManager;
+use srt::server::Server;
+use state::State;
 use tokio::runtime::Builder;
 
+mod config;
+mod database;
 mod http;
 mod metrics;
 mod proto;
 mod session;
+mod signal;
 mod srt;
 mod state;
 mod utils;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
-pub struct Args {}
+pub struct Args {
+    #[clap(short, long, value_name = "FILE", default_value = "config.toml")]
+    config: String,
+}
 
 fn main() {
-    let _args = Args::parse();
+    signal::init();
+    pretty_env_logger::init();
+
+    let args = Args::parse();
+
+    let config = match Config::from_file(&args.config) {
+        Ok(config) => config,
+        Err(err) => {
+            tracing::error!("Failed to load config file: {}", err);
+            return;
+        }
+    };
 
     let rt = Builder::new_multi_thread().enable_all().build().unwrap();
 
-    rt.block_on(async_main());
+    rt.block_on(async_main(config));
 }
 
-async fn async_main() {
-    pretty_env_logger::init();
-
+async fn async_main(config: Config) {
     let manager = BufferSessionManager::new();
 
-    let server = Server::new(manager, Config::default()).unwrap();
+    let server = Server::new(manager, config.srt.clone()).unwrap();
+    let state = State::new(server.state.clone());
 
-    let state = server.state.clone();
-    tokio::task::spawn(async move {
-        http::serve(state).await;
-    });
+    if config.srt.enabled {
+        tokio::task::spawn(async move {
+            server.await.unwrap();
+        });
+    }
 
-    server.await.unwrap();
+    if config.http.enabled {
+        tokio::task::spawn(async move {
+            http::serve(state).await;
+        });
+    }
+
+    // Wait for a shutdown signal (SIGINT|SIGTERM), then gracefully shut down.
+    // See `signal` module for more details.
+    signal::SHUTDOWN.wait().await;
+    println!("Bye");
 }

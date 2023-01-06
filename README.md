@@ -44,6 +44,19 @@ docker build --rm -t stsync-proxy -f stsync-proxy/Dockerfile .
 The only option currently supported is `RUST_LOG` which defines the loglevel of the server.
 Possible values are `trace`, `debug`, `info`, `warn`, `error` and `off`.
 
+## System Resources
+
+The server does not impose any direct requirements, but the number of runnable streams
+heavily depends on the avaliable resources. The most important requirement is raw UDP
+throughput; the most important resources are network bandwidth and CPU performance. Server
+performance scales almost linearly with thread count.
+
+As system exhaustion increases you will see increasing packet loss and with that loss of
+video data.
+
+With the default MTU of 1500 and default buffer size of 8192, the memory usage for a single
+stream will be roughly 12MB.
+
 ## Running the server
 
 ### Docker
@@ -51,8 +64,11 @@ Possible values are `trace`, `debug`, `info`, `warn`, `error` and `off`.
 After building the docker image (using the command above) you can run a docker container. **It is recommended to run the container
 in `network=host` mode due to the significant overhead of dockers NAT. Note that this also exposes the HTTP server on 9998 by default.**
 
+It is recommended to bind `config.toml` and `config.json` to allow reconfiguration without rebuilding the image. The default files can be
+found here: [config.toml](https://raw.githubusercontent.com/MrGunflame/streamsync/master/stsync-proxy/config.toml), [config.json](https://raw.githubusercontent.com/MrGunflame/streamsync/master/stsync-proxy/config.json).
+
 ```
-docker run -d --name streamsync -e RUST_LOG0=info --network=host stsync-proxy:latest
+docker run -d -v config.toml:/config.toml -v config.json:/config.json --name streamsync -e RUST_LOG=info --network=host stsync-proxy:latest
 ```
 
 The default configuration binds the SRT server to `0.0.0.0:9999`. It additionally binds a
@@ -74,12 +90,33 @@ The nested syntax is unsupported. Providing an invalid StreamID syntax will resu
 | s   | hex-encoded value       | (Session ID). An arbitrary key for a client. This serves as a authorization token. |
 | m   | `request \| publish` | (Mode). What a client wants to do with a stream. `publish` means the client wants to publish a stream. `request` means a client wants to view a stream. |
 
+## Acquiring a session key
+
+A session id/session key is a hex-encoded integer that allows access to a single stream. 
+Session keys have a limited lifetime of 5 minutes and are single use. This is to prevent
+potential man-in-the-middle attacks.
+
+Before acquiring a session key you need an access token. These defined in `config.json`.
+**They should only be transmitted over a secure connection.** You can then make a HTTP POST
+request to `/v1/streams/:id/sessions`, with the access token attached as a Bearer token in
+the `Authorization` header.
+
+The returned response contains the stream and session id:
+```
+{
+    "resource_id": "1",
+    "session_id": "91bf7a9ed500c8ce"
+}
+```
+
+The session key expires 5 minutes after being issued.
+
 ## Publishing via FFmpeg
 
 FFmpeg supports streaming over SRT. For example to stream a `test.ts` file to `127.0.0.1:9999` you can use the following command:
 
 ```
-ffmpeg -re -i test.ts -acodec copy -vcodec copy -f mpegts 'srt://127.0.0.1:9999?streamid=#!::r=1,s=1,mode=publish'
+ffmpeg -re -i test.ts -acodec copy -vcodec copy -f mpegts 'srt://127.0.0.1:9999?streamid=#!::r=1,s=1,m=publish'
 ```
 Note the use of the `-re` flag, without that flag FFmpeg will not stream but transcode the 
 file to the given output. Adjust `r=1` and `s=1` to your resource and session id accordingly.
@@ -169,8 +206,8 @@ no connections currently. All metrics share a `id` label that uniquely identifie
 
 ### Todo list
 
-- [ ] Workers
-- [ ] TSDBD (especially for the reciver)
+- [x] Workers
+- [x] TSDBD (especially for the reciver)
 - [ ] AES encryption
 - [ ] A secure way to bootstrap the AES encryption and exchange resource/session ids
 - [ ] Potentially an OBS plugin that automates configuration

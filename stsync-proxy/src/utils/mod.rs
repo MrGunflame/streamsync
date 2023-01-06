@@ -1,3 +1,5 @@
+pub mod serial;
+
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};

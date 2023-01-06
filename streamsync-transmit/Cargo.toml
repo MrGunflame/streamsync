@@ -1,0 +1,14 @@
+[package]
+name = "streamsync-transmit"
+description = "Transmit a file"
+version = "0.1.0"
+edition = "2021"
+authors = ["MrGunflame <git@robbsrv.de>"]
+repository = "https://github.com/MrGunflame/streamsync"
+license = "Apache-2.0"
+
+[dependencies]
+streamsync-api = { version = "0.1.0", path = "../streamsync-api" }
+
+clap = { version = "4.0.32", features = ["derive"] }
+tokio = { version = "1.24.1", features = ["rt", "rt-multi-thread", "macros"] }

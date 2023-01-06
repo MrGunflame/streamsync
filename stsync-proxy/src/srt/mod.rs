@@ -1206,43 +1206,190 @@ impl Decode for HandshakeExtensionFlags {
     }
 }
 
+/// See https://datatracker.ietf.org/doc/html/draft-sharabayko-srt-01#section-3.2.2
 #[derive(Clone, Debug)]
 pub struct KeyMaterialExtension {
-    seg0: Bits<U32>,
+    /// 1 bit reserved
+    /// 3 bits version = 1
+    /// 4 bits packet type = 2
+    /// ```text
+    ///  0 1 2 3 4 5 6 7
+    /// +-+-+-+-+-+-+-+-+
+    /// |S|  V  |   PT  |
+    /// +-+-+-+-+-+-+-+-+
+    /// ```
+    seg0: Bits<U8>,
+    /// This is a fixed-width field that
+    /// contains the signature 'HAI' encoded as a PnP Vendor ID [PNPID]
+    /// (in big-endian order).
     sign: u16,
+    /// 6 bits reserved
+    /// 2 Key-based Encryption: This is a fixed-width field that
+    /// indicates which SEKs (odd and/or even) are provided in the
+    /// extension:
+    /// *  00b: No SEK is provided (invalid extension format);
+    /// *  01b: Even key is provided;
+    /// *  10b: Odd key is provided;
+    /// *  11b: Both even and odd keys are provided.
     seg1: Bits<U8>,
-    keki: u32,
+    key_encryption_key_index: u32,
     cipher: u8,
-    auth: u8,
-    se: u8,
+    authentication: u8,
+    stream_encapsulation: u8,
     resv2: u8,
     resv3: u16,
-    slen: u8,
-    klen: u8,
+    /// Salt length / 4
+    salt_length: u8,
+    /// SEK length / 4
+    key_length: u8,
     salt: Bytes,
-    wrapped_key: Bytes,
+    integrity_check_vector: [u8; 8],
+    keys: Keys,
+}
+
+#[derive(Clone, Debug)]
+pub enum Keys {
+    Even(Bytes),
+    Odd(Bytes),
+    Both { even: Bytes, odd: Bytes },
+}
+
+impl Encode for Keys {
+    type Error = io::Error;
+
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        match self {
+            Self::Even(even) => even.encode(writer),
+            Self::Odd(odd) => odd.encode(writer),
+            Self::Both { even, odd } => {
+                even.encode(&mut writer)?;
+                odd.encode(writer)
+            }
+        }
+    }
 }
 
 impl Encode for KeyMaterialExtension {
     type Error = Error;
 
-    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    fn encode<W>(&self, mut writer: W) -> Result<(), Self::Error>
     where
         W: Write,
     {
+        self.seg0.encode(&mut writer)?;
+        self.sign.encode(&mut writer)?;
+        self.seg1.encode(&mut writer)?;
+        self.key_encryption_key_index.encode(&mut writer)?;
+        self.cipher.encode(&mut writer)?;
+        self.authentication.encode(&mut writer)?;
+        self.stream_encapsulation.encode(&mut writer)?;
+        self.resv2.encode(&mut writer)?;
+        self.resv3.encode(&mut writer)?;
+        self.salt_length.encode(&mut writer)?;
+        self.key_length.encode(&mut writer)?;
+        self.salt.encode(&mut writer)?;
+        self.integrity_check_vector.encode(&mut writer)?;
+        self.keys.encode(&mut writer)?;
+
         Ok(())
     }
 }
 
 impl Decode for KeyMaterialExtension {
-    type Error = Error;
+    type Error = KeyMaterialError;
 
-    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
+    fn decode<B>(mut bytes: &mut B) -> Result<Self, Self::Error>
     where
         B: Buf,
     {
-        Ok(Self {})
+        let seg0 = Bits::decode(&mut bytes)?;
+        let sign = u16::decode(&mut bytes)?;
+        let seg1 = Bits::<U8>::decode(&mut bytes)?;
+        let key_encryption_key_index = u32::decode(&mut bytes)?;
+        let cipher = u8::decode(&mut bytes)?;
+        let authentication = u8::decode(&mut bytes)?;
+        let stream_encapsulation = u8::decode(&mut bytes)?;
+        let resv2 = u8::decode(&mut bytes)?;
+        let resv3 = u16::decode(&mut bytes)?;
+        let salt_length = u8::decode(&mut bytes)?;
+        let key_length = u8::decode(&mut bytes)?;
+
+        let kk = seg1.bits(6..8).0;
+
+        if kk == 0b00 {
+            return Err(KeyMaterialError::NoSek);
+        }
+
+        let mut salt = vec![0; salt_length as usize * 4];
+        if bytes.remaining() < salt.len() {
+            return Err(KeyMaterialError::UnexpectedEof);
+        }
+        bytes.copy_to_slice(&mut salt);
+
+        let mut icv = [0; 8];
+        if bytes.remaining() < icv.len() {
+            return Err(KeyMaterialError::UnexpectedEof);
+        }
+        bytes.copy_to_slice(&mut icv);
+
+        // (64 + n * KLen * 8) bits where n = (KK + 1) / 2.
+        let num_keys = (kk + 1) / 2;
+        let mut keys = vec![0; (key_length as usize * 4) * num_keys as usize];
+        if bytes.remaining() < keys.len() {
+            return Err(KeyMaterialError::UnexpectedEof);
+        }
+        bytes.copy_to_slice(&mut keys);
+
+        let keys = match kk {
+            0b01 => Keys::Even(keys.into()),
+            0b10 => Keys::Odd(keys.into()),
+            0b11 => {
+                let keys = Bytes::from(keys);
+                let even = keys.slice(0..key_length as usize * 4);
+                let odd = keys.slice(key_length as usize * 4..);
+                Keys::Both { even, odd }
+            }
+            _ => unreachable!(),
+        };
+
+        Ok(Self {
+            seg0,
+            sign,
+            seg1,
+            key_encryption_key_index,
+            cipher,
+            authentication,
+            stream_encapsulation,
+            resv2,
+            resv3,
+            salt_length,
+            key_length,
+            salt: salt.into(),
+            integrity_check_vector: icv,
+            keys,
+        })
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeyMaterialError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    #[error("unsupported version")]
+    UnsupportedVersion,
+    #[error("invalid packet type")]
+    InvalidPacketType,
+    #[error("invalid sign")]
+    InvalidSign,
+    #[error("no sek")]
+    NoSek,
+    #[error("unknown cipher")]
+    UnknownCipher,
+    #[error("unexepcted end")]
+    UnexpectedEof,
 }
 
 /// A UTF-8 string with up to 512 bytes.

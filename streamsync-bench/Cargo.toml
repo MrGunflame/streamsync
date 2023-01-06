@@ -2,9 +2,11 @@
 name = "streamsync-bench"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["MrGunflame <git@robbsrv.de>"]
+repository = "https://github.com/MrGunflame/streamsync"
+license = "Apache-2.0"
 
 [dependencies]
+clap = { version = "4.0.32", features = ["derive"] }
 streamsync-api = { version = "*", path = "../streamsync-api" }
 tokio = { version = "1.23.0", features = ["full"] }

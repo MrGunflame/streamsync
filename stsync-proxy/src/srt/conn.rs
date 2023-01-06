@@ -169,8 +169,10 @@ where
             self.start_time = Instant::now();
             self.timestamp_is_wrapping = false;
 
-            if let ConnectionMode::Publish(sink) = &mut self.mode {
-                sink.update_start(self.start_time);
+            match &mut self.mode {
+                ConnectionMode::Publish(sink) => sink.update_start(self.start_time),
+                ConnectionMode::Request { stream } => stream.update_start(self.start_time),
+                _ => (),
             }
         }
 
@@ -242,14 +244,13 @@ where
             Poll::Pending => (),
         }
 
-        let timestamp = self.timestamp();
         let this = unsafe { self.get_unchecked_mut() };
 
         if let ConnectionMode::Request { stream } = &mut this.mode {
             let mut count = 0;
             while let Poll::Ready(res) = stream.poll_next_unpin(cx) {
                 match res {
-                    Some((buf, msgnum)) => {
+                    Some((buf, ts, msgnum)) => {
                         let packet = DataPacket::builder()
                             .sequence_number(this.server_sequence_number)
                             .message_number(msgnum)
@@ -260,7 +261,7 @@ where
                         this.server_sequence_number += 1;
 
                         let mut packet = packet.upcast();
-                        packet.header.timestamp = timestamp;
+                        packet.header.timestamp = ts;
                         packet.header.destination_socket_id = this.id.client_socket_id.0;
 
                         this.queue.push(packet);
@@ -792,6 +793,7 @@ where
                         stream,
                         self.state().config.buffer as usize,
                         self.client_sequence_number,
+                        self.start_time,
                     );
 
                     self.state().metrics.connections_handshake_current.dec();
@@ -882,7 +884,7 @@ where
 
         for seq in packet.lost_packet_sequence_numbers.iter() {
             match stream.get(seq.into()) {
-                Some((buf, msgnum)) => {
+                Some((buf, ts, msgnum)) => {
                     let packet = DataPacket::builder()
                         .sequence_number(seq)
                         .message_number(msgnum)
@@ -892,7 +894,7 @@ where
                         .build();
 
                     let mut packet = packet.upcast();
-                    packet.header.timestamp = timestamp;
+                    packet.header.timestamp = ts;
                     packet.header.destination_socket_id = self.id.client_socket_id.0;
 
                     self.queue.push_prio(packet);

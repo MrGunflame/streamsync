@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Buf;
 
@@ -25,6 +25,10 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
+    pub fn from_start(start: Instant) -> Self {
+        Self::from_micros(start.elapsed().as_micros() as u32)
+    }
+
     /// Creates a new `Timestamp` based on the number of `micros` since start of the stream.
     #[inline]
     pub const fn from_micros(micros: u32) -> Self {

@@ -133,9 +133,12 @@ impl Shutdown {
 pub fn init() {
     #[cfg(unix)]
     unix::init();
+
     #[cfg(not(unix))]
-    tracing::warn!("Signal handlers are only supported for unix-like systems");
-    tracing::warn!("Graceful shutdown will not work");
+    {
+        tracing::warn!("Signal handlers are only supported for unix-like systems");
+        tracing::warn!("Graceful shutdown will not work");
+    }
 }
 
 pub fn terminate() {

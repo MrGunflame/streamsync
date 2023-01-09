@@ -7,6 +7,7 @@ mod conn;
 mod handshake;
 mod metrics;
 pub mod proto;
+mod queue;
 pub mod server;
 mod sink;
 mod socket;

@@ -1,6 +1,5 @@
 //! SRT Output sink
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::num::Wrapping;
@@ -15,7 +14,7 @@ use tokio::time::{sleep_until, Sleep};
 
 use crate::session::{LiveSink, SessionManager};
 
-use super::utils::{MessageNumber, Sequence};
+use super::utils::MessageNumber;
 use super::DataPacket;
 
 /// A [`Sink`] that receives [`DataPacket`]s and converts them back into data.
@@ -135,22 +134,20 @@ where
 /// A queue of [`Segment`]s to be written.
 #[derive(Debug)]
 struct SegmentQueue {
-    queue: BTreeSet<Segment>,
+    queue: super::queue::SegmentQueue<Segment>,
     /// Total size of all buffers combined.
     size: usize,
     start: Instant,
     latency: Duration,
-    buffer_size: usize,
 }
 
 impl SegmentQueue {
     pub fn new(start: Instant, latency: Duration, buffer_size: usize) -> Self {
         Self {
-            queue: BTreeSet::new(),
+            queue: super::queue::SegmentQueue::new(buffer_size),
             size: 0,
             start,
             latency,
-            buffer_size,
         }
     }
 
@@ -160,13 +157,11 @@ impl SegmentQueue {
             return;
         }
 
-        let sequence = Sequence::new(packet.packet_sequence_number());
         let message_number = packet.message_number();
         let delivery_time = self.start + packet.header.timestamp.to_duration() + self.latency;
 
         self.size += packet.data.len();
-        self.queue.insert(Segment {
-            sequence,
+        self.queue.push(Segment {
             message_number,
             delivery_time,
             payload: packet.data,
@@ -176,13 +171,13 @@ impl SegmentQueue {
     /// Returns a reference to the first [`Segment`] in the `SegmentQueue`.
     #[inline]
     pub fn peek(&mut self) -> Option<&'_ Segment> {
-        self.queue.first()
+        self.queue.peek()
     }
 
     /// Removes and returns the first [`Segment`] from the `SegmentQueue`.
     #[inline]
     pub fn pop(&mut self) -> Option<Segment> {
-        let segment = self.queue.pop_first()?;
+        let segment = self.queue.pop()?;
         self.size -= segment.payload.len();
         Some(segment)
     }
@@ -203,11 +198,11 @@ impl SegmentQueue {
     }
 
     pub fn capacity(&self) -> usize {
-        self.buffer_size
+        self.queue.capacity()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.queue.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -218,7 +213,6 @@ impl SegmentQueue {
 
 #[derive(Clone, Debug)]
 struct Segment {
-    sequence: Sequence,
     message_number: MessageNumber,
     delivery_time: Instant,
     payload: Bytes,

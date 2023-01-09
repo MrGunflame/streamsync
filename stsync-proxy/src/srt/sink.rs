@@ -156,7 +156,7 @@ impl SegmentQueue {
 
     pub fn push(&mut self, mut packet: DataPacket) {
         // Prevent memory exhaustion from slow receivers or attacks.
-        if self.len() > self.buffer_size {
+        if self.len() == self.capacity() {
             return;
         }
 
@@ -173,11 +173,15 @@ impl SegmentQueue {
         });
     }
 
-    pub fn first(&mut self) -> Option<&'_ Segment> {
+    /// Returns a reference to the first [`Segment`] in the `SegmentQueue`.
+    #[inline]
+    pub fn peek(&mut self) -> Option<&'_ Segment> {
         self.queue.first()
     }
 
-    pub fn pop_first(&mut self) -> Option<Segment> {
+    /// Removes and returns the first [`Segment`] from the `SegmentQueue`.
+    #[inline]
+    pub fn pop(&mut self) -> Option<Segment> {
         let segment = self.queue.pop_first()?;
         self.size -= segment.payload.len();
         Some(segment)
@@ -196,6 +200,10 @@ impl SegmentQueue {
 
     pub fn len(&self) -> usize {
         self.queue.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.buffer_size
     }
 
     pub fn is_empty(&self) -> bool {
@@ -256,10 +264,10 @@ impl<'a> Future for Take<'a> {
         let now = Instant::now();
 
         let deadline;
-        if let Some(seg) = this.queue.first() {
+        if let Some(seg) = this.queue.peek() {
             if seg.delivery_time <= now {
                 // FIXME: pop_first == None is unreachable.
-                return Poll::Ready(this.queue.pop_first());
+                return Poll::Ready(this.queue.pop());
             } else {
                 deadline = seg.delivery_time;
             }
@@ -282,6 +290,6 @@ impl<'a> Future for Take<'a> {
 
         // Since we only ever store one waiter the segment is guaranteed to still be
         // untouched when the timer expires.
-        Poll::Ready(this.queue.pop_first())
+        Poll::Ready(this.queue.pop())
     }
 }

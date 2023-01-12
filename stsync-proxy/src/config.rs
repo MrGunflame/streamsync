@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::srt;
+use crate::srt::config::Workers;
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
@@ -37,7 +38,7 @@ pub struct Http {
 pub struct Srt {
     pub enabled: bool,
     pub bind: SocketAddr,
-    pub workers: Option<usize>,
+    pub workers: Workers,
 
     pub rcvbuf: usize,
     pub sndbuf: usize,

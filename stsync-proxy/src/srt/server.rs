@@ -45,11 +45,7 @@ where
         tracing::info!("Srt socket listening on {}", socket.local_addr()?);
         tracing::info!("Socket Recv-Q: {}, Send-Q: {}", rx, tx);
 
-        let num_workers = config.workers.unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
-        });
+        let num_workers = config.workers.get();
 
         let socket = Arc::new(socket);
         let state = State::new(session_manager, config);
@@ -164,10 +160,11 @@ impl Worker {
             );
 
             loop {
-                let mut buf = BytesMut::zeroed(1500);
+                let mut buf = state.arena.get(1500);
                 let (len, addr) = socket.recv_from(&mut buf).await?;
                 tracing::trace!("[{}] Got {} bytes from {}", ident, len, addr);
                 buf.truncate(len);
+                let mut buf = buf.freeze();
 
                 let packet = match Packet::decode(&mut buf) {
                     Ok(packet) => packet,

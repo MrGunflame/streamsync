@@ -236,6 +236,9 @@ impl Drop for BytesMut {
             return;
         }
 
+        // fence
+        chunk.ref_count.load(Ordering::Acquire);
+
         unsafe { Box::from_raw(self.ptr.as_ptr()) };
     }
 }
@@ -261,13 +264,11 @@ impl Chunk {
         let inner = unsafe { self.ptr.as_ref() };
         let ptr = inner.get(size)?;
 
-        unsafe {
-            Some(BytesMut {
-                chunk: self.ptr,
-                ptr: NonNull::new_unchecked(ptr),
-                len: size,
-            })
-        }
+        Some(BytesMut {
+            chunk: self.ptr,
+            ptr,
+            len: size,
+        })
     }
 }
 
@@ -288,6 +289,9 @@ impl Drop for Chunk {
         if rc != 1 {
             return;
         }
+
+        // fence
+        chunk.ref_count.load(Ordering::Acquire);
 
         // Drop the allocation
         unsafe { Box::from_raw(self.ptr.as_ptr()) };
@@ -324,7 +328,9 @@ impl ChunkInner {
         }
     }
 
-    pub fn get(&self, size: usize) -> Option<*mut u8> {
+    /// Acquire a new buffer with the given `size` from this chunk. Returns `None` if this chunk
+    /// does not have enough empty capacity to allocate the requested buffer.
+    pub fn get(&self, size: usize) -> Option<NonNull<u8>> {
         let mut head = self.head.load(Ordering::Acquire);
 
         // Check that this chunk has enough free capacity to hold size bytes.
@@ -346,7 +352,7 @@ impl ChunkInner {
         self.ref_count.fetch_add(1, Ordering::SeqCst);
 
         // SAFETY: We have exlusive access to ptr + head.
-        unsafe { Some(self.ptr.add(head)) }
+        unsafe { Some(NonNull::new_unchecked(self.ptr.add(head))) }
     }
 
     unsafe fn reset(&self) {

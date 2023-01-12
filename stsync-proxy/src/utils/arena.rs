@@ -384,13 +384,13 @@ unsafe fn chunk_clone(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes
     unsafe { Bytes::with_vtable(ptr, len, AtomicPtr::new(shared as *mut ()), &SHARED_VTABLE) }
 }
 
-unsafe fn chunk_to_vec(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Vec<u8> {
+unsafe fn chunk_to_vec(_data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Vec<u8> {
     let mut buf = Vec::with_capacity(len);
     unsafe { std::ptr::copy_nonoverlapping(ptr, buf.as_mut_ptr(), len) };
     buf
 }
 
-unsafe fn chunk_drop(data: &mut AtomicPtr<()>, ptr: *const u8, len: usize) {
+unsafe fn chunk_drop(data: &mut AtomicPtr<()>, _ptr: *const u8, _len: usize) {
     let shared = data.load(Ordering::Relaxed) as *mut ChunkInner;
 
     let rc = unsafe { (*shared).ref_count.fetch_sub(1, Ordering::Release) };

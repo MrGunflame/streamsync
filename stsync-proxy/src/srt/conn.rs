@@ -612,6 +612,8 @@ where
     }
 
     fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<()> {
+        event!(parent: &self.resource_span, Level::DEBUG, "peer is closing");
+
         self.close()
     }
 
@@ -635,6 +637,8 @@ where
     }
 
     fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<()> {
+        event!(parent: &self.resource_span, Level::DEBUG, "keepalive");
+
         self.send(Keepalive::builder().build())
     }
 

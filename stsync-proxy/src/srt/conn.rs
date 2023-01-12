@@ -395,28 +395,28 @@ where
                     ControlPacketType::Handshake => match packet.downcast() {
                         Ok(packet) => self.handle_handshake(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast hs packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Keepalive => match packet.downcast() {
                         Ok(packet) => self.handle_keepalive(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast keepalive packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Ack => match packet.downcast() {
                         Ok(packet) => self.handle_ack(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast ack packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Nak => match packet.downcast() {
                         Ok(packet) => self.handle_nak(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast nak packet: {}", err);
                             Ok(())
                         }
                     },
@@ -427,14 +427,14 @@ where
                     ControlPacketType::Shutdown => match packet.downcast() {
                         Ok(packet) => self.handle_shutdown(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast shutdown packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::AckAck => match packet.downcast() {
                         Ok(packet) => self.handle_ackack(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast ackack packet: {}", err);
                             Ok(())
                         }
                     },

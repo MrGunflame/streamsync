@@ -22,7 +22,6 @@ log = "0.4.17"
 tracing ={ version = "0.1.37", features = ["log-always"] }
 socket2 = "0.4.7"
 snowflaked = { version = "0.1.5", features = ["sync"] }
-bytes = "1.2.1"
 tokio-stream = { version = "0.1.11", features = ["sync"] }
 hyper = { version = "0.14.20", features = ["http1", "http2", "server"] }
 ahash = "0.8.0"
@@ -31,6 +30,10 @@ clap = { version = "4.0.18", features = ["derive"] }
 pin-project = "1.0.12"
 serde_json = "1.0.87"
 toml = "0.5.9"
+
+# Fork of bytes with a public bytes vtable until bytes::Vtable becomes pub.
+# Required for custom arena allocator.
+bytes = { git = "https://github.com/MrGunflame/bytes", branch = "pub-vtable" }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.26.1", features = ["signal"] }

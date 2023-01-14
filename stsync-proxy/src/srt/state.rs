@@ -11,6 +11,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::session::SessionManager;
+use crate::utils::arena::Arena;
 
 use super::config::Config;
 use super::conn::ConnectionHandle;
@@ -29,6 +30,12 @@ where
     S: SessionManager,
 {
     pub fn new(session_manager: S, config: Config) -> Self {
+        let arena = Arena::builder()
+            .chunk_size(config.mtu as usize * config.flow_window as usize)
+            .min_chunks(config.workers.get())
+            .max_chunks(usize::MAX << 1)
+            .build();
+
         Self {
             inner: Arc::new(StateInner {
                 config: config,
@@ -37,6 +44,7 @@ where
                 session_manager,
                 conn_metrics: Mutex::new(AHashMap::new()),
                 metrics: ServerMetrics::new(),
+                arena,
             }),
         }
     }
@@ -77,6 +85,7 @@ where
     pub session_manager: S,
     pub conn_metrics: Mutex<AHashMap<ConnectionId, Arc<ConnectionMetrics>>>,
     pub metrics: ServerMetrics,
+    pub arena: Arena,
 }
 
 impl<S> StateInner<S>

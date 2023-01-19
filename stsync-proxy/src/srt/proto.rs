@@ -7,6 +7,7 @@ pub use timestamp::Timestamp;
 
 use std::{
     io::Write,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     ops::{Range, RangeInclusive},
 };
 
@@ -72,8 +73,87 @@ pub struct Handshake {
     /// IPv4 or IPv6 address of the packet's
     /// sender.  The value consists of four 32-bit fields.  In the case of
     /// IPv4 addresses, fields 2, 3 and 4 are filled with zeroes.
-    pub peer_ip_address: u128,
+    pub peer_ip_address: PeerIpAddress,
     pub extensions: Extensions,
+}
+
+/// The IP address of a peer.
+///
+/// To construct a `PeerIpAddress`, use one of the `From` implementations of [`IpAddr`],
+/// [`Ipv4Addr`] or [`Ipv6Addr`].
+///
+/// The value internally consists of four `u32` fields. In the case of an [`Ipv4Addr`] only the
+/// first field is occupied.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PeerIpAddress(u128);
+
+impl Encode for PeerIpAddress {
+    type Error = <u128 as Encode>::Error;
+
+    fn encode<W>(&self, writer: W) -> Result<(), Self::Error>
+    where
+        W: Write,
+    {
+        self.0.encode(writer)
+    }
+
+    fn size_hint(&self) -> usize {
+        self.0.size_hint()
+    }
+}
+
+impl Decode for PeerIpAddress {
+    type Error = <u128 as Decode>::Error;
+
+    fn decode<B>(bytes: &mut B) -> Result<Self, Self::Error>
+    where
+        B: Buf,
+    {
+        u128::decode(bytes).map(Self)
+    }
+}
+
+impl From<IpAddr> for PeerIpAddress {
+    #[inline]
+    fn from(value: IpAddr) -> Self {
+        match value {
+            IpAddr::V4(addr) => Self::from(addr),
+            IpAddr::V6(addr) => Self::from(addr),
+        }
+    }
+}
+
+impl From<Ipv4Addr> for PeerIpAddress {
+    #[inline]
+    fn from(value: Ipv4Addr) -> Self {
+        let bits = u32::from(value).to_be();
+        Self((bits as u128) << 96)
+    }
+}
+
+impl From<Ipv6Addr> for PeerIpAddress {
+    #[inline]
+    fn from(value: Ipv6Addr) -> Self {
+        let bits = u128::from(value).to_be();
+        Self(bits)
+    }
+}
+
+impl From<PeerIpAddress> for IpAddr {
+    #[inline]
+    fn from(value: PeerIpAddress) -> Self {
+        // Ipv6
+        if value.0 & (1 << 96) - 1 != 0 {
+            let bits = value.0;
+
+            IpAddr::V6(Ipv6Addr::from(bits.to_be()))
+            // Ipv4
+        } else {
+            let bits = (value.0 >> 96) as u32;
+
+            IpAddr::V4(Ipv4Addr::from(bits.to_be()))
+        }
+    }
 }
 
 /// The `Keep-Alive` packet.
@@ -450,9 +530,11 @@ impl ExactSizeIterator for SequenceNumbersIter {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
     use crate::proto::Decode;
 
-    use super::SequenceNumbers;
+    use super::{PeerIpAddress, SequenceNumbers};
 
     #[test]
     fn test_sequence_numbers() {
@@ -477,5 +559,15 @@ mod tests {
         assert_eq!(iter.next(), Some(4));
         assert_eq!(iter.next(), Some(5));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_peer_ip_address() {
+        let addr = PeerIpAddress::from(Ipv4Addr::new(192, 168, 178, 68));
+        assert_eq!(addr.0, 0x44_b2_a8_c0__00_00_00_00__00_00_00_00__00_00_00_00);
+        assert_eq!(
+            IpAddr::from(addr),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 178, 68))
+        );
     }
 }

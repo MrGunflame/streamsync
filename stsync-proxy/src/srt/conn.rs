@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::hint;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -92,6 +93,7 @@ where
     latency: Duration,
 
     shutdown: Pin<Box<ShutdownListener>>,
+    peer_address: IpAddr,
 }
 
 impl<S> Connection<S>
@@ -111,6 +113,7 @@ where
         socket: &SrtSocket,
         seqnum: u32,
         syn_cookie: u32,
+        peer_address: IpAddr,
     ) -> (Self, ConnectionHandle) {
         let (tx, rx) = mpsc::channel(1024);
 
@@ -143,6 +146,7 @@ where
             loss_list: LossList::new(),
             latency: Duration::ZERO,
             shutdown: Box::pin(ShutdownListener::new()),
+            peer_address,
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -860,7 +864,7 @@ where
         packet.handshake_type = reason;
         packet.srt_socket_id = self.id.server_socket_id.0;
         packet.syn_cookie = 0;
-        packet.peer_ip_address = 0;
+        packet.peer_ip_address = self.peer_address.into();
 
         self.send(packet)
     }

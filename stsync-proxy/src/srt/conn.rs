@@ -552,6 +552,8 @@ where
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Read));
 
+        let timestamp = self.timestamp();
+
         // Only handle data packets from peers that are publishing.
         let tx = match &mut self.mode {
             ConnectionMode::Publish(tx) => tx,
@@ -562,15 +564,20 @@ where
 
         tracing::trace!("Received packet with sequence {}", seqnum);
 
-        let fut = tx.feed(packet);
-        let fut = unsafe { std::mem::transmute(fut) };
-        self.poll_state = PollState::WriteSink(fut);
+        // TODO: Check the packet retransmission flag.
+        let is_retransmitted = self.loss_list.remove(seqnum).is_some();
+
+        // Discard packets that we didn't expect or arrived too late.
+        // We must make sure to not move the sequence number backwards.
+        if !is_retransmitted && seqnum < self.client_sequence_number {
+            return Ok(());
+        }
 
         // If the sequence number of the packet is not the next expected sequence number
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.loss_list.remove(seqnum).is_none() && seqnum > self.client_sequence_number {
+        if !is_retransmitted && seqnum > self.client_sequence_number {
             tracing::trace!(
                 "Lost packets with sequences [{}, {})",
                 self.client_sequence_number,
@@ -590,18 +597,23 @@ where
                 let builder = Nak::builder()
                     .lost_packet_sequence_numbers(self.client_sequence_number.get()..seqnum.get());
 
-                self.send_prio(builder.build())?;
+                let mut packet = builder.build().upcast();
+                packet.header.timestamp = timestamp;
+                packet.header.destination_socket_id = self.id.client_socket_id.0;
+                self.queue.push_prio(packet);
             }
         }
 
-        // Discard packets that we didn't expect or arrived too late.
-        // We must make sure to not move the sequence number backwards.
-        if seqnum < self.client_sequence_number {
-            tracing::trace!("Discarded packet with sequence {}", seqnum);
-            return Ok(());
-        }
+        let fut = tx.feed(packet);
+        let fut = unsafe { std::mem::transmute(fut) };
+        self.poll_state = PollState::WriteSink(fut);
 
-        self.client_sequence_number = seqnum + 1;
+        // Only move the sequence forward if the packet was an original (not retransmitted).
+        if !is_retransmitted {
+            // The next expected sequence is now seqnum + 1, i.e. the sequence
+            // following the current packet.
+            self.client_sequence_number = seqnum + 1;
+        }
 
         Ok(())
     }

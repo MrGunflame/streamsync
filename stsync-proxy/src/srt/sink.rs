@@ -151,6 +151,12 @@ impl SegmentQueue {
         }
     }
 
+    /// Pushes a new [`DataPacket`] onto the `SegmentQueue`.
+    ///
+    /// Note that `push` does not prevent pushing multiple [`DataPacket`]s with the same
+    /// [`MessageNumber`]. The [`MessageNumber`] is only used to give the packet the correct
+    /// order in the queue. If pushing multiple [`DataPacket`]s with the same [`MessageNumber`]
+    /// both packets will be scheduled. Which packet comes first is unspecified.
     pub fn push(&mut self, mut packet: DataPacket) {
         // Prevent memory exhaustion from slow receivers or attacks.
         if self.len() == self.capacity() {

@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 /// A fixed size ordered queue.
 #[derive(Clone, Debug)]
@@ -6,8 +7,8 @@ pub struct SegmentQueue<S>
 where
     S: Ord,
 {
-    queue: BTreeSet<S>,
-    size: usize,
+    // We want a min-heap.
+    queue: BinaryHeap<Reverse<S>>,
 }
 
 impl<S> SegmentQueue<S>
@@ -17,28 +18,27 @@ where
     #[inline]
     pub fn new(size: usize) -> Self {
         Self {
-            queue: BTreeSet::new(),
-            size,
+            queue: BinaryHeap::with_capacity(size),
         }
     }
 
     #[inline]
     pub fn push(&mut self, segment: S) {
-        if self.queue.len() == self.size {
+        if self.len() == self.capacity() {
             return;
         }
 
-        self.queue.insert(segment);
+        self.queue.push(Reverse(segment));
     }
 
     #[inline]
     pub fn peek(&mut self) -> Option<&'_ S> {
-        self.queue.first()
+        self.queue.peek().map(|s| &s.0)
     }
 
     #[inline]
     pub fn pop(&mut self) -> Option<S> {
-        self.queue.pop_first()
+        self.queue.pop().map(|s| s.0)
     }
 
     #[inline]
@@ -48,7 +48,7 @@ where
 
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.size
+        self.queue.capacity()
     }
 
     #[inline]

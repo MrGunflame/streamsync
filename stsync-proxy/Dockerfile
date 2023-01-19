@@ -1,15 +1,15 @@
 FROM rust:alpine as builder
 
-RUN apk add musl-dev g++ openssl-dev
+RUN apk add musl-dev g++ openssl-dev make
 WORKDIR /app
 COPY . .
 
-RUN cargo build --bin stsync-proxy --release
+RUN cd stsync-proxy && make build
 
 FROM scratch
 
 WORKDIR /
 
-COPY --from=builder /app/target/release/stsync-proxy /bin
+COPY --from=builder /app/target/release/stsync-proxy /streamsync
 
-ENTRYPOINT ["/bin"]
+ENTRYPOINT ["/streamsync"]

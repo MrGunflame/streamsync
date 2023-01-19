@@ -1,6 +1,5 @@
 //! SRT Output sink
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::marker::PhantomPinned;
 use std::num::Wrapping;
@@ -15,7 +14,7 @@ use tokio::time::{sleep_until, Sleep};
 
 use crate::session::{LiveSink, SessionManager};
 
-use super::utils::{MessageNumber, Sequence};
+use super::utils::MessageNumber;
 use super::DataPacket;
 
 /// A [`Sink`] that receives [`DataPacket`]s and converts them back into data.
@@ -135,50 +134,56 @@ where
 /// A queue of [`Segment`]s to be written.
 #[derive(Debug)]
 struct SegmentQueue {
-    queue: BTreeSet<Segment>,
+    queue: super::queue::SegmentQueue<Segment>,
     /// Total size of all buffers combined.
     size: usize,
     start: Instant,
     latency: Duration,
-    buffer_size: usize,
 }
 
 impl SegmentQueue {
     pub fn new(start: Instant, latency: Duration, buffer_size: usize) -> Self {
         Self {
-            queue: BTreeSet::new(),
+            queue: super::queue::SegmentQueue::new(buffer_size),
             size: 0,
             start,
             latency,
-            buffer_size,
         }
     }
 
+    /// Pushes a new [`DataPacket`] onto the `SegmentQueue`.
+    ///
+    /// Note that `push` does not prevent pushing multiple [`DataPacket`]s with the same
+    /// [`MessageNumber`]. The [`MessageNumber`] is only used to give the packet the correct
+    /// order in the queue. If pushing multiple [`DataPacket`]s with the same [`MessageNumber`]
+    /// both packets will be scheduled. Which packet comes first is unspecified.
     pub fn push(&mut self, mut packet: DataPacket) {
         // Prevent memory exhaustion from slow receivers or attacks.
-        if self.len() > self.buffer_size {
+        if self.len() == self.capacity() {
             return;
         }
 
-        let sequence = Sequence::new(packet.packet_sequence_number());
         let message_number = packet.message_number();
         let delivery_time = self.start + packet.header.timestamp.to_duration() + self.latency;
 
         self.size += packet.data.len();
-        self.queue.insert(Segment {
-            sequence,
+        self.queue.push(Segment {
             message_number,
             delivery_time,
             payload: packet.data,
         });
     }
 
-    pub fn first(&mut self) -> Option<&'_ Segment> {
-        self.queue.first()
+    /// Returns a reference to the first [`Segment`] in the `SegmentQueue`.
+    #[inline]
+    pub fn peek(&mut self) -> Option<&'_ Segment> {
+        self.queue.peek()
     }
 
-    pub fn pop_first(&mut self) -> Option<Segment> {
-        let segment = self.queue.pop_first()?;
+    /// Removes and returns the first [`Segment`] from the `SegmentQueue`.
+    #[inline]
+    pub fn pop(&mut self) -> Option<Segment> {
+        let segment = self.queue.pop()?;
         self.size -= segment.payload.len();
         Some(segment)
     }
@@ -198,8 +203,12 @@ impl SegmentQueue {
         self.queue.len()
     }
 
+    pub fn capacity(&self) -> usize {
+        self.queue.capacity()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.queue.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -210,7 +219,6 @@ impl SegmentQueue {
 
 #[derive(Clone, Debug)]
 struct Segment {
-    sequence: Sequence,
     message_number: MessageNumber,
     delivery_time: Instant,
     payload: Bytes,
@@ -256,10 +264,10 @@ impl<'a> Future for Take<'a> {
         let now = Instant::now();
 
         let deadline;
-        if let Some(seg) = this.queue.first() {
+        if let Some(seg) = this.queue.peek() {
             if seg.delivery_time <= now {
                 // FIXME: pop_first == None is unreachable.
-                return Poll::Ready(this.queue.pop_first());
+                return Poll::Ready(this.queue.pop());
             } else {
                 deadline = seg.delivery_time;
             }
@@ -282,6 +290,6 @@ impl<'a> Future for Take<'a> {
 
         // Since we only ever store one waiter the segment is guaranteed to still be
         // untouched when the timer expires.
-        Poll::Ready(this.queue.pop_first())
+        Poll::Ready(this.queue.pop())
     }
 }

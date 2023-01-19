@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::hint;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -92,6 +93,7 @@ where
     latency: Duration,
 
     shutdown: Pin<Box<ShutdownListener>>,
+    peer_address: IpAddr,
 }
 
 impl<S> Connection<S>
@@ -111,6 +113,7 @@ where
         socket: &SrtSocket,
         seqnum: u32,
         syn_cookie: u32,
+        peer_address: IpAddr,
     ) -> (Self, ConnectionHandle) {
         let (tx, rx) = mpsc::channel(1024);
 
@@ -143,6 +146,7 @@ where
             loss_list: LossList::new(),
             latency: Duration::ZERO,
             shutdown: Box::pin(ShutdownListener::new()),
+            peer_address,
         };
 
         let handle = ConnectionHandle { id, tx };
@@ -236,12 +240,8 @@ where
             Poll::Pending => (),
         }
 
-        match self.tick_interval.poll_unpin(cx) {
-            Poll::Ready(()) => {
-                self.tick()?;
-                // return Poll::Ready(Ok(()));
-            }
-            Poll::Pending => (),
+        if self.tick_interval.poll_unpin(cx).is_ready() {
+            self.tick()?;
         }
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -277,15 +277,6 @@ where
             if count > 0 {
                 return Poll::Ready(Ok(()));
             }
-
-            // match stream.poll_next_unpin(cx) {
-            //     Poll::Ready(Some(buf)) => {}
-            //     Poll::Ready(None) => {
-            //         self.close()?;
-            //         return Poll::Ready(Ok(()));
-            //     }
-            //     Poll::Pending => (),
-            // }
         }
 
         Poll::Pending
@@ -395,28 +386,28 @@ where
                     ControlPacketType::Handshake => match packet.downcast() {
                         Ok(packet) => self.handle_handshake(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast hs packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Keepalive => match packet.downcast() {
                         Ok(packet) => self.handle_keepalive(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast keepalive packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Ack => match packet.downcast() {
                         Ok(packet) => self.handle_ack(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast ack packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::Nak => match packet.downcast() {
                         Ok(packet) => self.handle_nak(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast nak packet: {}", err);
                             Ok(())
                         }
                     },
@@ -427,14 +418,14 @@ where
                     ControlPacketType::Shutdown => match packet.downcast() {
                         Ok(packet) => self.handle_shutdown(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast shutdown packet: {}", err);
                             Ok(())
                         }
                     },
                     ControlPacketType::AckAck => match packet.downcast() {
                         Ok(packet) => self.handle_ackack(packet),
                         Err(err) => {
-                            tracing::debug!("Failed to downcast packet: {}", err);
+                            tracing::debug!("Failed to downcast ackack packet: {}", err);
                             Ok(())
                         }
                     },
@@ -470,6 +461,10 @@ where
             self.metrics
                 .data_bytes_lost
                 .add(packets_lost * self.mtu as usize);
+
+            let acks_lost = self.inflight_acks.clear(self.rtt);
+            self.metrics.ctrl_packets_lost.add(acks_lost);
+            self.metrics.ctrl_bytes_lost.add(acks_lost * 44);
 
             let timespan = self.start_time.elapsed().as_secs() as u32;
 
@@ -557,6 +552,8 @@ where
         #[cfg(debug_assertions)]
         assert!(matches!(self.poll_state, PollState::Read));
 
+        let timestamp = self.timestamp();
+
         // Only handle data packets from peers that are publishing.
         let tx = match &mut self.mode {
             ConnectionMode::Publish(tx) => tx,
@@ -567,15 +564,20 @@ where
 
         tracing::trace!("Received packet with sequence {}", seqnum);
 
-        let fut = tx.feed(packet);
-        let fut = unsafe { std::mem::transmute(fut) };
-        self.poll_state = PollState::WriteSink(fut);
+        // TODO: Check the packet retransmission flag.
+        let is_retransmitted = self.loss_list.remove(seqnum).is_some();
+
+        // Discard packets that we didn't expect or arrived too late.
+        // We must make sure to not move the sequence number backwards.
+        if !is_retransmitted && seqnum < self.client_sequence_number {
+            return Ok(());
+        }
 
         // If the sequence number of the packet is not the next expected sequence number
         // and is not already a lost sequence number we lost all sequences up to the
         // received sequence. We move the sequence counter forward accordingly and register
         // all missing sequence numbers in case they are being received later out-of-order.
-        if self.loss_list.remove(seqnum).is_none() && seqnum > self.client_sequence_number {
+        if !is_retransmitted && seqnum > self.client_sequence_number {
             tracing::trace!(
                 "Lost packets with sequences [{}, {})",
                 self.client_sequence_number,
@@ -595,23 +597,30 @@ where
                 let builder = Nak::builder()
                     .lost_packet_sequence_numbers(self.client_sequence_number.get()..seqnum.get());
 
-                self.send_prio(builder.build())?;
+                let mut packet = builder.build().upcast();
+                packet.header.timestamp = timestamp;
+                packet.header.destination_socket_id = self.id.client_socket_id.0;
+                self.queue.push_prio(packet);
             }
         }
 
-        // Discard packets that we didn't expect or arrived too late.
-        // We must make sure to not move the sequence number backwards.
-        if seqnum < self.client_sequence_number {
-            tracing::trace!("Discarded packet with sequence {}", seqnum);
-            return Ok(());
-        }
+        let fut = tx.feed(packet);
+        let fut = unsafe { std::mem::transmute(fut) };
+        self.poll_state = PollState::WriteSink(fut);
 
-        self.client_sequence_number = seqnum + 1;
+        // Only move the sequence forward if the packet was an original (not retransmitted).
+        if !is_retransmitted {
+            // The next expected sequence is now seqnum + 1, i.e. the sequence
+            // following the current packet.
+            self.client_sequence_number = seqnum + 1;
+        }
 
         Ok(())
     }
 
     fn handle_shutdown(&mut self, _packet: Shutdown) -> Result<()> {
+        event!(parent: &self.resource_span, Level::DEBUG, "peer is closing");
+
         self.close()
     }
 
@@ -635,6 +644,8 @@ where
     }
 
     fn handle_keepalive(&mut self, _packet: Keepalive) -> Result<()> {
+        event!(parent: &self.resource_span, Level::DEBUG, "keepalive");
+
         self.send(Keepalive::builder().build())
     }
 
@@ -865,7 +876,7 @@ where
         packet.handshake_type = reason;
         packet.srt_socket_id = self.id.server_socket_id.0;
         packet.syn_cookie = 0;
-        packet.peer_ip_address = 0;
+        packet.peer_ip_address = self.peer_address.into();
 
         self.send(packet)
     }

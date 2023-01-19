@@ -77,6 +77,7 @@ where
     resp.syn_cookie = syn_cookie;
     resp.srt_socket_id = server_socket_id;
     resp.initial_packet_sequence_number = server_seqnum;
+    resp.peer_ip_address = stream.addr.ip().into();
 
     resp.maximum_transmission_unit_size = state.config.mtu;
     resp.maximum_flow_window_size = state.config.flow_window;
@@ -90,8 +91,16 @@ where
     };
 
     // SAFETY: We guarantee that `state` outlives the connection.
-    let (conn, handle) =
-        unsafe { Connection::new(id, state, stream.socket, client_seqnum, syn_cookie) };
+    let (conn, handle) = unsafe {
+        Connection::new(
+            id,
+            state,
+            stream.socket,
+            client_seqnum,
+            syn_cookie,
+            stream.addr.ip(),
+        )
+    };
 
     tokio::task::spawn(async move {
         tracing::trace!("Spawned new connection");

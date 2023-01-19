@@ -22,6 +22,8 @@ pub async fn serve(state: State) {
         let state = state.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req| {
+                tracing::debug!("HEAD {}", req.uri());
+
                 let origin = req.headers().get(ORIGIN).cloned();
 
                 let mut ctx = Context {

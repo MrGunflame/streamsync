@@ -47,6 +47,14 @@ impl MessageNumber {
     }
 }
 
+impl Default for MessageNumber {
+    #[inline]
+    fn default() -> Self {
+        // SAFETY: 1 < (1 << 26) - 1
+        unsafe { Self::new_unchecked(1) }
+    }
+}
+
 impl Add<u32> for MessageNumber {
     type Output = Self;
 

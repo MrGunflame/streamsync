@@ -1,7 +1,7 @@
 [package]
 name = "stsync-proxy"
 description = "The streamsync SRT proxy server"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["MrGunflame <git@robbsrv.de>"]
 repository = "https://github.com/MrGunflame/streamsync"

@@ -236,12 +236,8 @@ where
             Poll::Pending => (),
         }
 
-        match self.tick_interval.poll_unpin(cx) {
-            Poll::Ready(()) => {
-                self.tick()?;
-                // return Poll::Ready(Ok(()));
-            }
-            Poll::Pending => (),
+        if self.tick_interval.poll_unpin(cx).is_ready() {
+            self.tick()?;
         }
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -277,15 +273,6 @@ where
             if count > 0 {
                 return Poll::Ready(Ok(()));
             }
-
-            // match stream.poll_next_unpin(cx) {
-            //     Poll::Ready(Some(buf)) => {}
-            //     Poll::Ready(None) => {
-            //         self.close()?;
-            //         return Poll::Ready(Ok(()));
-            //     }
-            //     Poll::Pending => (),
-            // }
         }
 
         Poll::Pending
@@ -470,6 +457,10 @@ where
             self.metrics
                 .data_bytes_lost
                 .add(packets_lost * self.mtu as usize);
+
+            let acks_lost = self.inflight_acks.clear(self.rtt);
+            self.metrics.ctrl_packets_lost.add(acks_lost);
+            self.metrics.ctrl_bytes_lost.add(acks_lost * 44);
 
             let timespan = self.start_time.elapsed().as_secs() as u32;
 

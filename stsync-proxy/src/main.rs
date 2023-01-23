@@ -6,6 +6,7 @@ use log as _;
 
 use clap::Parser;
 use config::Config;
+use ragequit::SHUTDOWN;
 use session::buffer::BufferSessionManager;
 use srt::server::Server;
 use state::State;
@@ -17,7 +18,6 @@ mod http;
 mod metrics;
 mod proto;
 mod session;
-mod signal;
 mod srt;
 mod state;
 mod utils;
@@ -30,7 +30,7 @@ pub struct Args {
 }
 
 fn main() {
-    signal::init();
+    ragequit::init();
     pretty_env_logger::init();
 
     let args = Args::parse();
@@ -68,6 +68,6 @@ async fn async_main(config: Config) {
 
     // Wait for a shutdown signal (SIGINT|SIGTERM), then gracefully shut down.
     // See `signal` module for more details.
-    signal::SHUTDOWN.wait().await;
+    SHUTDOWN.wait().await;
     println!("Bye");
 }

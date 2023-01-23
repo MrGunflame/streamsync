@@ -11,12 +11,12 @@ use std::time::{Duration, Instant};
 
 use futures::sink::{Close, Feed};
 use futures::{pin_mut, FutureExt, SinkExt, StreamExt};
+use ragequit::{ShutdownListener, SHUTDOWN};
 use tokio::sync::mpsc;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{event, span, Level, Span};
 
 use crate::session::{LiveStream, SessionManager};
-use crate::signal::ShutdownListener;
 use crate::srt::proto::Nak;
 use crate::srt::{EncryptionField, HandshakeType, VERSION};
 use crate::utils::Shared;
@@ -145,7 +145,7 @@ where
             client_sequence_number: Sequence::new(seqnum),
             loss_list: LossList::new(),
             latency: Duration::ZERO,
-            shutdown: Box::pin(ShutdownListener::new()),
+            shutdown: Box::pin(SHUTDOWN.listen()),
             peer_address,
         };
 
@@ -444,7 +444,7 @@ where
 
     fn tick(&mut self) -> Result<()> {
         // Server initiated shutdown.
-        if self.shutdown.in_progress() {
+        if self.shutdown.is_in_progress() {
             return self.close();
         }
 

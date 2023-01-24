@@ -44,44 +44,44 @@ pub(super) async fn metrics(ctx: Context) -> Response<Body> {
         writeln!(
             string,
             "srt_connection_data_packets_sent{{id=\"{}\"}} {}",
-            id, metrics.data_packets_sent
+            id, metrics.data_packets_sent.original
         )
         .unwrap();
 
         writeln!(
             string,
             "srt_connection_data_bytes_sent{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_sent
+            id, metrics.data_bytes_sent.original
         )
         .unwrap();
 
-        writeln!(
-            string,
-            "srt_connection_data_packets_recv{{id=\"{}\"}} {}",
-            id, metrics.data_packets_recv
-        )
-        .unwrap();
+        for (ctr, label) in [
+            (&metrics.data_packets_recv.original, "original"),
+            (&metrics.data_packets_recv.retransmitted, "retransmitted"),
+            (&metrics.data_packets_recv.dropped, "dropped"),
+            (&metrics.data_packets_recv.lost, "lost"),
+        ] {
+            writeln!(
+                string,
+                "srt_connection_data_packets_recv{{id=\"{}\",type=\"{}\"}} {}",
+                id, label, ctr
+            )
+            .unwrap();
+        }
 
-        writeln!(
-            string,
-            "srt_connection_data_bytes_recv{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_recv
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_packets_lost{{id=\"{}\"}} {}",
-            id, metrics.data_packets_lost
-        )
-        .unwrap();
-
-        writeln!(
-            string,
-            "srt_connection_data_bytes_lost{{id=\"{}\"}} {}",
-            id, metrics.data_bytes_lost
-        )
-        .unwrap();
+        for (ctr, label) in [
+            (&metrics.data_bytes_recv.original, "original"),
+            (&metrics.data_bytes_recv.retransmitted, "retransmitted"),
+            (&metrics.data_bytes_recv.dropped, "dropped"),
+            (&metrics.data_bytes_recv.lost, "lost"),
+        ] {
+            writeln!(
+                string,
+                "srt_connection_data_bytes_recv{{id=\"{}\",type=\"{}\"}} {}",
+                id, label, ctr
+            )
+            .unwrap();
+        }
 
         writeln!(
             string,

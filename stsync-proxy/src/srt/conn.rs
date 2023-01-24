@@ -204,8 +204,8 @@ where
             // Update connection stats.
             match packet.header.packet_type() {
                 PacketType::Data => {
-                    self.metrics.data_packets_sent.add(1);
-                    self.metrics.data_bytes_sent.add(packet.size());
+                    self.metrics.data_bytes_sent.original.add(1);
+                    self.metrics.data_bytes_sent.original.add(packet.size());
                 }
                 PacketType::Control => {
                     self.metrics.ctrl_packets_sent.add(1);
@@ -364,19 +364,13 @@ where
         self.last_time = Instant::now();
 
         match packet.header.packet_type() {
-            PacketType::Data => {
-                // Update connection metrics.
-                self.metrics.data_packets_recv.inc();
-                self.metrics.data_bytes_recv.add(packet.size());
-
-                match packet.downcast() {
-                    Ok(packet) => self.handle_data(packet),
-                    Err(err) => {
-                        tracing::debug!("Failed to downcast packet: {}", err);
-                        Ok(())
-                    }
+            PacketType::Data => match packet.downcast() {
+                Ok(packet) => self.handle_data(packet),
+                Err(err) => {
+                    tracing::debug!("Failed to downcast packet: {}", err);
+                    Ok(())
                 }
-            }
+            },
             PacketType::Control => {
                 // Update connection metrics.
                 self.metrics.ctrl_packets_recv.inc();
@@ -457,9 +451,12 @@ where
         if self.mode.is_publish() {
             // Purge all lost packets.
             let packets_lost = self.loss_list.clear(self.rtt);
-            self.metrics.data_packets_lost.add(packets_lost);
+
+            self.metrics.data_bytes_recv.lost.add(packets_lost);
+            // Estimation for a max-sized packet.
             self.metrics
-                .data_bytes_lost
+                .data_bytes_recv
+                .lost
                 .add(packets_lost * self.mtu as usize);
 
             let acks_lost = self.inflight_acks.clear(self.rtt);
@@ -474,8 +471,8 @@ where
                 packets_recv_rate = 0;
                 bytes_recv_rate = 0;
             } else {
-                packets_recv_rate = self.metrics.data_packets_recv.get() as u32 / timespan;
-                bytes_recv_rate = self.metrics.data_bytes_recv.get() as u32 / timespan;
+                packets_recv_rate = self.metrics.data_bytes_recv.original.get() as u32 / timespan;
+                bytes_recv_rate = self.metrics.data_bytes_recv.original.get() as u32 / timespan;
             }
 
             let sink = match &self.mode {
@@ -570,6 +567,10 @@ where
         // Discard packets that we didn't expect or arrived too late.
         // We must make sure to not move the sequence number backwards.
         if !is_retransmitted && seqnum < self.client_sequence_number {
+            // Track the dropped packet.
+            self.metrics.data_packets_recv.dropped.inc();
+            self.metrics.data_bytes_recv.dropped.add(packet.data.len());
+
             return Ok(());
         }
 
@@ -602,6 +603,18 @@ where
                 packet.header.destination_socket_id = self.id.client_socket_id.0;
                 self.queue.push_prio(packet);
             }
+        }
+
+        // Track the accepted packet.
+        if is_retransmitted {
+            self.metrics.data_packets_recv.retransmitted.inc();
+            self.metrics
+                .data_bytes_recv
+                .retransmitted
+                .add(packet.data.len());
+        } else {
+            self.metrics.data_packets_recv.original.inc();
+            self.metrics.data_bytes_recv.original.add(packet.data.len());
         }
 
         let fut = tx.feed(packet);
@@ -1349,33 +1362,6 @@ impl TransmissionQueue {
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty() && self.prio.is_empty()
     }
-}
-
-pub fn close_metrics<S: SessionManager>(conn: &Connection<S>) {
-    let m = &conn.metrics;
-
-    tracing::info!(
-        "
-    | CTRL SENT | CTRL RECV | CTRL LOST | DATA SENT | DATA RECV | DATA LOST | RTT |
-    | --------- | --------- | --------- | --------- | --------- | --------- | --- |
-    | {}        | {}        | {}        | {}        | {}        | {}        | {}  |
-    | {}        | {}        | {}        | {}        | {}        | {}        | {}  |
-    ",
-        m.ctrl_packets_sent,
-        m.ctrl_packets_recv,
-        m.ctrl_packets_lost,
-        m.data_packets_sent,
-        m.data_packets_recv,
-        m.data_packets_lost,
-        conn.rtt.rtt,
-        m.ctrl_bytes_sent,
-        m.ctrl_bytes_recv,
-        m.ctrl_bytes_lost,
-        m.data_bytes_sent,
-        m.data_bytes_recv,
-        m.data_bytes_lost,
-        conn.rtt.rtt_variance,
-    );
 }
 
 #[cfg(test)]

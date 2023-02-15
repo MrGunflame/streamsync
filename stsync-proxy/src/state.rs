@@ -4,7 +4,6 @@ use std::sync::Arc;
 use crate::database::Database;
 use crate::session::buffer::BufferSessionManager;
 use crate::srt;
-use crate::utils::arena::Arena;
 
 #[derive(Clone, Debug)]
 pub struct State(Arc<StateInner>);

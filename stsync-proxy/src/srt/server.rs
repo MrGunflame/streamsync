@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
 use std::future::Future;
@@ -160,10 +160,12 @@ impl Worker {
             );
 
             loop {
-                let mut buf = state.arena.get(1500);
+                let mut buf = state.arena.alloc(1500);
+
                 let (len, addr) = socket.recv_from(&mut buf).await?;
                 tracing::trace!("[{}] Got {} bytes from {}", ident, len, addr);
                 buf.truncate(len);
+
                 let mut buf = buf.freeze();
 
                 let packet = match Packet::decode(&mut buf) {

@@ -1,4 +1,3 @@
-pub mod arena;
 pub mod serial;
 
 use std::cmp::Ordering;

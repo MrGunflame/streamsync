@@ -173,7 +173,8 @@ impl Default for DataPacket {
 
         Self {
             header,
-            data: Bytes::new(),
+            // FIXME: Change back to `Bytes::new()` when possible.
+            data: Bytes::copy_from_slice(&[]),
         }
     }
 }

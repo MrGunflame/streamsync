@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use ahash::{AHashMap, AHashSet};
 use parking_lot::{Mutex, RwLock};
+use polymock::Arena;
 use rand::rngs::OsRng;
 use rand::RngCore;
 
 use crate::session::SessionManager;
-use crate::utils::arena::Arena;
 
 use super::config::Config;
 use super::conn::ConnectionHandle;
@@ -30,11 +30,7 @@ where
     S: SessionManager,
 {
     pub fn new(session_manager: S, config: Config) -> Self {
-        let arena = Arena::builder()
-            .chunk_size(config.mtu as usize * config.flow_window as usize)
-            .min_chunks(config.workers.get())
-            .max_chunks(usize::MAX << 1)
-            .build();
+        let arena = Arena::new(config.mtu as usize * config.flow_window as usize);
 
         Self {
             inner: Arc::new(StateInner {

@@ -1,6 +1,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(unused_crate_dependencies)]
 
+// Use the bytes drop-in replacement types until the bytes
+// crate allows public vtable creation.
+extern crate polymock as bytes;
+
 // We only import log to remove trace and debug levels at compile time.
 use log as _;
 

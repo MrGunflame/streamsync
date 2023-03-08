@@ -175,7 +175,6 @@ impl Worker {
                     }
                 };
 
-                let socket = socket.clone();
                 handle_message(packet, addr, &socket, &state).await?;
             }
         });

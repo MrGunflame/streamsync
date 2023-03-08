@@ -83,8 +83,6 @@ where
     }
 }
 
-unsafe impl<S> Send for Server<S> where S: SessionManager + Send {}
-
 async fn handle_message<S>(
     packet: Packet,
     addr: SocketAddr,
